@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>みらいパスポート</title>
+  
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@400;500;700&family=M+PLUS+Rounded+1c:wght@500;800&family=Poppins:wght@500;700&display=swap" rel="stylesheet">
+  
+  <script src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+  <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';</script>
+
+  <?!= include('css'); ?>
+  
+  <script>
+    const APP_CONFIG = { mode: <?= mode ?>, taskId: <?= taskId ?> };
+  </script>
+</head>
+<body class="<?= mode === 'student' ? 'student-mode' : '' ?>">
+
+  <!-- Loading Overlay -->
+  <div id="loadingOverlay" class="d-none">
+    <div class="scene">
+      <div class="passport">
+        <!-- ベース (クラス名を修正) -->
+        <div class="pp-sheet back-plate"></div>
+        <div class="pp-sheet base-left"></div>
+        <div class="pp-sheet base-right"></div>
+        <!-- アニメーションページ -->
+        <div class="pp-sheet flipping-page">
+          <div class="pp-face front design-1">
+            <div class="page-content">
+              <div class="pattern-dot large"></div>
+              <div class="pattern-dot small"></div>
+              <div class="pattern-bar"></div>
+            </div>
+          </div>
+          <div class="pp-face back"></div>
+        </div>
+        <div class="pp-sheet flipping-page">
+          <div class="pp-face front design-2">
+            <div class="page-content">
+              <div class="pattern-dot large"></div>
+              <div class="pattern-bar"></div>
+              <div class="pattern-bar"></div>
+            </div>
+          </div>
+          <div class="pp-face back"></div>
+        </div>
+        <div class="pp-sheet flipping-page">
+          <div class="pp-face front design-3">
+            <div class="page-content">
+              <div class="pattern-dot large"></div>
+              <div class="pattern-dot small"></div>
+            </div>
+          </div>
+          <div class="pp-face back"></div>
+        </div>
+      </div>
+      <!-- メッセージ -->
+      <div class="loading-container">
+        <div class="loading-label" id="loadingText">準備中...</div>
+        <div class="loading-subtext" id="loadingSubText">しばらくお待ちください</div>
+        <!-- Batch Progress -->
+        <div id="batchProgressContainer" class="d-none mt-3" style="width: 200px; margin: 0 auto;">
+          <div class="progress" style="height: 6px; border-radius: 3px; background-color: #e3f2fd;">
+            <div id="batchProgressBar" class="progress-bar bg-info" style="width:0%"></div>
+          </div>
+          <small id="batchProgressText" class="d-block mt-1 text-muted" style="font-size: 0.75rem;"></small>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Setup -->
+  <div id="setupWizard" class="container d-none vh-100 d-flex align-items-center justify-content-center">
+    <div class="card shadow-lg p-5 text-center" style="max-width: 600px;">
+      <h1 class="text-primary mb-4"><i class="bi bi-stars"></i> みらいパスポート</h1>
+      <button class="btn btn-primary btn-lg rounded-pill px-5" onclick="App.performSetup()">初期化開始</button>
+    </div>
+  </div>
+
+  <!-- App -->
+  <div id="appContainer" class="d-none d-flex flex-column vh-100">
+    <header class="navbar navbar-expand-lg navbar-light bg-white sticky-top shadow-sm px-4">
+      <a class="navbar-brand d-flex align-items-center" href="#">
+        <i class="bi bi-journal-richtext text-primary fs-3 me-2"></i>
+        <span class="fw-bold text-primary">みらいパスポート</span>
+        <? if (mode === 'student') { ?> <span class="badge bg-success ms-2">児童モード</span> <? } ?>
+      </a>
+      <div class="ms-auto d-flex gap-2 align-items-center">
+        <? if (mode === 'teacher') { ?>
+          <button class="btn btn-outline-danger btn-sm" onclick="Modals.openPdfImport()"><i class="bi bi-file-pdf"></i> 資料読込</button>
+          <button class="btn btn-primary btn-sm rounded-pill" onclick="App.startBatchGeneration()"><i class="bi bi-lightning-fill"></i> 一括</button>
+          <div class="vr mx-2"></div>
+          <button class="btn btn-outline-secondary btn-sm" onclick="Modals.openImport()">計画</button>
+          <button class="btn btn-light text-secondary" onclick="Modals.openSettings()"><i class="bi bi-gear-fill"></i></button>
+        <? } else { ?>
+          <span id="autoSaveIndicator" class="text-muted small me-2"><i class="bi bi-cloud-check"></i> 保存済</span>
+          <input type="text" id="studentNameInput" class="form-control form-control-sm" placeholder="名前" style="width:120px;">
+          <button class="btn btn-outline-primary btn-sm rounded-pill" onclick="App.submitStudentResponse('draft')">一時保存</button>
+          <button class="btn btn-success btn-sm rounded-pill fw-bold" onclick="App.submitStudentResponse('submitted')">提出</button>
+        <? } ?>
+      </div>
+    </header>
+
+    <div class="flex-grow-1 d-flex overflow-hidden">
+      <? if (mode === 'teacher') { ?>
+      <nav id="sidebar" class="bg-light border-end d-flex flex-column" style="width: 320px; min-width: 320px;">
+        <ul class="nav nav-tabs nav-fill">
+          <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-tasks">授業リスト</button></li>
+          <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-history" onclick="App.loadHistory()">履歴</button></li>
+        </ul>
+        <div class="tab-content flex-grow-1 overflow-auto">
+          <div class="tab-pane fade show active p-0" id="tab-tasks">
+            <div class="p-2 bg-white border-bottom d-flex justify-content-between">
+              <div class="form-check ms-2"><input class="form-check-input" type="checkbox" id="selectAllTasks" onchange="App.toggleSelectAll(this)"><label class="form-check-label small" for="selectAllTasks">全選択</label></div>
+              <small class="text-muted" id="taskCount">0件</small>
+            </div>
+            <div id="taskList" class="list-group list-group-flush">
+              <div class="text-center text-muted mt-5 p-3"><p class="small">計画を読み込んでください</p></div>
+            </div>
+          </div>
+          <div class="tab-pane fade p-0" id="tab-history"><div id="historyList" class="list-group list-group-flush"></div></div>
+        </div>
+      </nav>
+      <? } ?>
+
+      <main class="flex-grow-1 bg-secondary bg-opacity-10 p-4 overflow-auto d-flex flex-column align-items-center relative">
+        <div id="editorToolbar" class="bg-white rounded-pill shadow-sm px-4 py-2 mb-3 d-flex gap-3 align-items-center d-none sticky-top" style="top: 10px; z-index: 20;">
+          <span id="currentTaskTitle" class="fw-bold text-truncate" style="max-width: 150px;">未選択</span>
+          <div class="vr"></div>
+          <button id="btnDrawMode" class="btn btn-sm btn-outline-dark rounded-pill" onclick="App.toggleDrawMode()"><i class="bi bi-pencil-fill"></i> 手書き</button>
+          <div id="drawTools" class="d-none d-flex gap-2">
+            <input type="color" id="penColor" value="#ff0000" class="form-control form-control-color form-control-sm" onchange="App.updateBrush()">
+            <button class="btn btn-sm btn-light" onclick="App.clearCanvas()"><i class="bi bi-eraser"></i></button>
+          </div>
+          <div class="dropdown">
+            <button class="btn btn-sm btn-outline-dark rounded-pill dropdown-toggle" data-bs-toggle="dropdown"><i class="bi bi-image"></i></button>
+            <ul class="dropdown-menu"><li><button class="dropdown-item" onclick="document.getElementById('imgInput').click()">挿入...</button></li></ul>
+            <input type="file" id="imgInput" class="d-none" accept="image/*" onchange="App.insertImage(this)">
+          </div>
+
+          <? if (mode === 'teacher') { ?>
+            <div class="vr"></div>
+            <button class="btn btn-sm btn-outline-primary rounded-pill" onclick="App.generateSingleWorksheet()">再生成</button>
+            <button class="btn btn-sm btn-outline-warning text-dark rounded-pill" onclick="Modals.openRubric()"><i class="bi bi-grid-3x3"></i> 評価</button>
+            <button class="btn btn-sm btn-outline-info text-dark rounded-pill" onclick="Modals.openDashboard()"><i class="bi bi-people-fill"></i> 提出</button>
+            <div class="dropdown">
+              <button class="btn btn-sm btn-primary rounded-pill dropdown-toggle" data-bs-toggle="dropdown">共有/出力</button>
+              <ul class="dropdown-menu">
+                <li><button class="dropdown-item" onclick="App.showShareUrl()"><i class="bi bi-share"></i> 児童へ配布</button></li>
+                <li><hr class="dropdown-divider"></li>
+                <li><button class="dropdown-item" onclick="App.createPdf()">PDF</button></li>
+              </ul>
+            </div>
+            <button class="btn btn-sm btn-success rounded-pill" onclick="App.saveCurrentWorksheet()">保存</button>
+          <? } else { ?>
+             <div class="vr"></div>
+             <button class="btn btn-sm btn-outline-info rounded-pill" onclick="Modals.openGallery()"><i class="bi bi-collection"></i> 広場</button>
+             <button id="btnFeedback" class="btn btn-sm btn-warning rounded-pill d-none" onclick="App.showFeedback()"><i class="bi bi-envelope-exclamation-fill"></i></button>
+          <? } ?>
+        </div>
+
+        <div class="sheet-scroll-area">
+          <div class="sheet-container relative">
+            <div id="paperArea" class="sheet shadow-sm d-none">
+              <div id="worksheetContent" class="h-100 w-100 p-5" contenteditable="<?= mode === 'teacher' ? 'true' : 'false' ?>"></div>
+            </div>
+            <canvas id="drawCanvas" class="d-none"></canvas>
+          </div>
+        </div>
+      </main>
+    </div>
+    
+    <!-- Footer -->
+    <footer class="text-center text-muted py-3 mt-auto border-top bg-white">
+      <small>© 2026 みらいパスポート <a href="https://note.com/cute_borage86" target="_blank" class="text-decoration-none text-muted">GIGA山</a></small>
+    </footer>
+  </div>
+
+  <!-- Modals (省略なし) -->
+  <div class="modal fade" id="dashboardModal" tabindex="-1"><div class="modal-dialog modal-xl modal-dialog-scrollable"><div class="modal-content"><div class="modal-header"><h5 class="modal-title">提出状況</h5><button class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body bg-light"><div id="dashboardGrid" class="row g-3"></div></div></div></div></div>
+  <div class="modal fade" id="gradingModal" tabindex="-1"><div class="modal-dialog modal-fullscreen"><div class="modal-content"><div class="modal-header bg-dark text-white"><h5 class="modal-title" id="gradingTitle">添削</h5><button class="btn btn-light btn-sm ms-auto me-2" onclick="App.saveGrading()">返却</button><button class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div><div class="modal-body p-0 d-flex justify-content-center bg-secondary"><div id="gradingContainer" class="sheet-container m-4 scale-down"></div></div><div class="modal-footer"><input type="text" id="feedbackTextInput" class="form-control" placeholder="コメント..."></div></div></div></div>
+  <div class="modal fade" id="galleryModal" tabindex="-1"><div class="modal-dialog modal-xl"><div class="modal-content"><div class="modal-header"><h5 class="modal-title">みんなの広場</h5><button class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body bg-light"><div id="galleryGrid" class="row g-3"></div></div></div></div></div>
+  <div class="modal fade" id="rubricModal" tabindex="-1"><div class="modal-dialog modal-xl"><div class="modal-content"><div class="modal-header bg-warning bg-opacity-10"><h5 class="modal-title">評価基準</h5><button class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><div id="rubricContainer" class="p-3 border rounded bg-light mb-3" contenteditable="true" style="min-height: 200px;"></div></div><div class="modal-footer"><button class="btn btn-warning rounded-pill me-auto" onclick="App.generateRubric()">AI作成</button><button class="btn btn-primary" onclick="App.saveRubric()">保存</button></div></div></div></div>
+  <div class="modal fade" id="shareModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content"><div class="modal-header"><h5 class="modal-title">配布URL</h5><button class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><div class="input-group"><input type="text" id="shareUrlInput" class="form-control" readonly><button class="btn btn-outline-secondary" onclick="navigator.clipboard.writeText(document.getElementById('shareUrlInput').value)"><i class="bi bi-clipboard"></i></button></div></div></div></div></div>
+  <div class="modal fade" id="settingsModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content"><div class="modal-header"><h5 class="modal-title">設定</h5><button class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><div class="mb-3"><label>API Key</label><input type="password" id="apiKeyInput" class="form-control"></div><div class="mb-3"><label>Name</label><input type="text" id="teacherNameInput" class="form-control"></div></div><div class="modal-footer"><button class="btn btn-primary" onclick="App.saveSettings()">保存</button></div></div></div></div>
+  <div class="modal fade" id="importModal" tabindex="-1"><div class="modal-dialog modal-lg"><div class="modal-content"><div class="modal-header"><h5 class="modal-title">計画読込</h5><button class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><textarea id="jsonInput" class="form-control font-monospace mb-3" rows="10"></textarea><button class="btn btn-outline-secondary btn-sm" onclick="App.loadSampleJson()">サンプル</button></div><div class="modal-footer"><button class="btn btn-primary" onclick="App.processImport()">解析</button></div></div></div></div>
+  <div class="modal fade" id="pdfImportModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content"><div class="modal-header"><h5 class="modal-title">資料読込</h5><button class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><input type="file" id="ocrFileInput" class="form-control" accept="application/pdf,image/*"></div><div class="modal-footer"><button class="btn btn-primary" onclick="App.processOcrImport()">解析</button></div></div></div></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+  <?!= include('js'); ?>
+</body>
+</html>
