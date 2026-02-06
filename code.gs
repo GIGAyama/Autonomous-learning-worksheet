@@ -1,6 +1,8 @@
 /**
  * みらいパスポート v2.1.1
  * Update: Launch with Student ID/Name (Phase 2 Integration)
+ * Update: Sync with Mirai Compass (Status & Mode)
+ * Update: Shared DB Integration for Unit Plan Import (Phase 3)
  */
 
 const APP_NAME = "みらいパスポート";
@@ -13,13 +15,16 @@ const DB_NAME = APP_NAME + "_DB";
 function doGet(e) {
   const template = HtmlService.createTemplateFromFile('index');
   
-  // URLパラメータの取得（連携用）
+  // URLパラメータの取得
   template.mode = e.parameter.mode || 'teacher'; // teacher | student
   template.taskId = e.parameter.taskId || '';
   
   // Phase 2: 自動ログイン用パラメータ
-  template.studentId = e.parameter.studentId || '';     // Compass側で管理しているユニークID
-  template.studentName = e.parameter.studentName || ''; // 児童名
+  template.studentId = e.parameter.studentId || '';     
+  template.studentName = e.parameter.studentName || ''; 
+
+  // Phase 3: 共有DB連携用ID
+  template.importId = e.parameter.importId || ''; 
   
   return template.evaluate()
     .setTitle(APP_NAME)
@@ -61,6 +66,8 @@ function performInitialSetup() {
     // DB構造定義
     ensureSheet(ss, 'Worksheets', ['taskId', 'unitName', 'stepTitle', 'htmlContent', 'lastUpdated', 'jsonSource', 'canvasJson', 'rubricHtml', 'isShared']);
     ensureSheet(ss, 'Responses', ['responseId', 'taskId', 'studentId', 'studentName', 'submittedAt', 'canvasImage', 'textContent', 'status', 'feedbackText', 'score', 'feedbackJson', 'canvasJson', 'isPublic', 'reactions']);
+    // 連携用シート（存在しなければ作成）
+    ensureSheet(ss, 'ImportQueue', ['transactionId', 'dataJson', 'createdAt']);
 
     props.setProperty('DB_SS_ID', ss.getId());
     return { success: true, url: ss.getUrl() };
@@ -82,20 +89,33 @@ function ensureSheet(ss, name, header) {
 // 2. 設定管理
 // ==================================================
 
-function saveUserConfig(apiKey, teacherName) {
-  PropertiesService.getUserProperties().setProperties({ 
-    'GEMINI_API_KEY': apiKey, 
-    'TEACHER_NAME': teacherName 
-  });
+/**
+ * ユーザー設定を保存
+ * [Update] Compass連携URLを追加
+ */
+function saveUserConfig(apiKey, teacherName, compassUrl) {
+  const props = {
+    'GEMINI_API_KEY': apiKey,
+    'TEACHER_NAME': teacherName
+  };
+  if (compassUrl !== undefined) {
+    props['COMPASS_URL'] = compassUrl.trim();
+  }
+  PropertiesService.getUserProperties().setProperties(props);
   return true;
 }
 
+/**
+ * ユーザー設定を取得
+ * [Update] Compass連携URLを取得
+ */
 function getUserConfig() {
   const userProps = PropertiesService.getUserProperties();
   const scriptProps = PropertiesService.getScriptProperties();
   return { 
     apiKey: userProps.getProperty('GEMINI_API_KEY') || scriptProps.getProperty('GEMINI_API_KEY') || '', 
-    teacherName: userProps.getProperty('TEACHER_NAME') || '' 
+    teacherName: userProps.getProperty('TEACHER_NAME') || '',
+    compassUrl: userProps.getProperty('COMPASS_URL') || scriptProps.getProperty('COMPASS_URL') || ''
   };
 }
 
@@ -173,7 +193,9 @@ function getWorksheetsByIds(taskIds) {
         unitName: row[1],
         stepTitle: row[2],
         htmlContent: row[3],
-        canvasJson: safeJSONParse(row[6])
+        canvasJson: safeJSONParse(row[6]),
+        // JSON Sourceも返す（AI生成時の情報補完用）
+        jsonSource: safeJSONParse(row[5])
       });
     }
   }
@@ -333,3 +355,114 @@ function generateRubricAI(data) {
 function getWebAppUrl(){ return ScriptApp.getService().getUrl(); }
 function safeJSONParse(s){ try { return JSON.parse(s); } catch (e) { return null; } }
 function ensureArray(val) { return Array.isArray(val) ? val : []; }
+
+// ==================================================
+// 6. Compass Integration (Shared DB Mode)
+// ==================================================
+
+/**
+ * [Phase 3] 共有DBの受信ボックスからデータを取り込む処理
+ * コンパスから書き込まれたImportQueueをチェックし、データを取得・削除する
+ */
+function consumeImportQueue(importId) {
+  if (!importId) return { success: false, message: "IDが指定されていません" };
+  
+  const ss = getDbSpreadsheet();
+  const sheet = ss.getSheetByName('ImportQueue');
+  
+  if (!sheet) return { success: false, message: "連携用シートが見つかりません" };
+  
+  const data = sheet.getDataRange().getValues();
+  let foundData = null;
+  let deleteRowIndex = -1;
+  
+  // IDを検索 (Column A: transactionId)
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][0]) === String(importId)) {
+      try {
+        foundData = JSON.parse(data[i][1]); // dataJson
+      } catch (e) {
+        console.error("JSON Parse Error in Queue:", e);
+      }
+      deleteRowIndex = i + 1;
+      break;
+    }
+  }
+  
+  if (deleteRowIndex > 0 && foundData) {
+    // データが見つかったら、タスク枠を作成する処理を実行
+    const result = handleImportUnitPlan(foundData);
+    
+    // 処理が終わったらキューから削除（使い捨て）
+    sheet.deleteRow(deleteRowIndex);
+    
+    return { success: true, ...result };
+  }
+  
+  return { success: false, message: "連携データが見つかりませんでした（期限切れまたは処理済み）" };
+}
+
+/**
+ * 単元計画の一括インポート処理（内部呼び出し用）
+ * データをWorksheetsシートに登録し、HTML空の状態で保存する
+ */
+function handleImportUnitPlan(data) {
+  // data: { unitName, grade, tasks: [{ taskId, title, description, ... }] }
+  const ss = getDbSpreadsheet();
+  const sheet = ss.getSheetByName('Worksheets');
+  const existingData = sheet.getDataRange().getValues();
+  
+  // IDマップ作成
+  const idMap = new Map();
+  for (let i = 1; i < existingData.length; i++) {
+    idMap.set(String(existingData[i][0]), i + 1);
+  }
+
+  const now = new Date();
+  const unitName = data.unitName || "無題の単元";
+  const addedTaskIds = [];
+
+  const updates = [];
+  const inserts = [];
+
+  data.tasks.forEach(task => {
+    const taskId = String(task.taskId);
+    addedTaskIds.push(taskId);
+    
+    const record = [
+      taskId,
+      unitName,
+      task.title || "無題",
+      "", // htmlContent: 空で未生成状態にする
+      now,
+      JSON.stringify(task), // jsonSource
+      "", // canvasJson
+      "", // rubricHtml
+      false // isShared
+    ];
+
+    if (idMap.has(taskId)) {
+      // 既存: 未生成(HTML空)の場合のみ更新
+      const row = idMap.get(taskId);
+      const currentHtml = existingData[row - 1][3];
+      if (!currentHtml) {
+        updates.push({ row: row, values: record });
+      }
+    } else {
+      // 新規
+      inserts.push(record);
+    }
+  });
+
+  if (inserts.length > 0) {
+    sheet.getRange(sheet.getLastRow() + 1, 1, inserts.length, inserts[0].length).setValues(inserts);
+  }
+  updates.forEach(u => {
+    sheet.getRange(u.row, 1, 1, u.values.length).setValues([u.values]);
+  });
+
+  return { 
+    taskIds: addedTaskIds,
+    message: `${inserts.length}件を追加、${updates.length}件を更新しました` 
+  };
+}
