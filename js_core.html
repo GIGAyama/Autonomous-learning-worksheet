@@ -652,6 +652,8 @@ const App = {
       .replace(/```/g, "")
       .replace(/^[\s\S]*?<body[^>]*>/i, "")
       .replace(/<\/body>[\s\S]*$/i, "")
+      // 外部画像タグを除去（via.placeholder.com 等、AIが誤挿入する場合の安全策）
+      .replace(/<img\s+[^>]*src\s*=\s*["']https?:\/\/[^"']+["'][^>]*\/?>/gi, '<!-- 外部画像は非対応のため除去 -->')
       .trim();
   },
 
