@@ -476,6 +476,28 @@ function getHistory() {
 }
 
 
+/**
+ * 児童向け: 配信済みワークシートの一覧（軽量版）を取得する。
+ * htmlContent を含まないため高速。
+ * 児童サイドバーで単元別にワークシートを表示するために使用。
+ *
+ * → 読み込み元: Worksheets シートの A列（ID）、B列（単元名）、C列（タイトル）
+ *
+ * @return {Object[]} { taskId, unitName, stepTitle } の配列
+ */
+function getStudentWorksheetList() {
+  var sheet = getDbSpreadsheet().getSheetByName('Worksheets');
+  if (sheet.getLastRow() < 2) return [];
+
+  var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 3).getValues();
+  return data
+    .filter(function(row) { return row[0]; })
+    .map(function(row) {
+      return { taskId: String(row[0]), unitName: String(row[1]), stepTitle: String(row[2]) };
+    });
+}
+
+
 /* ============================================================
  *  5. データベース操作 — 児童レスポンス（Responses シート）
  * ============================================================ */

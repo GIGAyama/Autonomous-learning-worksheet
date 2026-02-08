@@ -599,6 +599,167 @@ Object.assign(App, {
       text: 'まだコメントはありません',
       icon: 'info'
     });
+  },
+
+
+  /* ==========================================================
+   *  7. 児童用ワークシート一覧サイドパネル
+   * ==========================================================
+   *
+   * 配信済みのワークシートをサイドパネルにリスト表示し、
+   * クリックで別のワークシートに遷移できるようにする。
+   * 同じ単元のものだけ表示し、単元フィルターで切替可能。
+   */
+
+  /**
+   * サイドパネルの表示/非表示を切り替える
+   *
+   * 初回表示時にサーバーからワークシート一覧を取得する。
+   */
+  toggleStudentSidebar: () => {
+    var panel = document.getElementById('studentSidebar');
+    if (!panel) return;
+
+    var isHidden = panel.classList.contains('d-none');
+    if (isHidden) {
+      panel.classList.remove('d-none');
+      // 初回表示時のみデータを取得
+      if (!State.studentWsList) {
+        App.loadStudentWorksheetList();
+      }
+    } else {
+      panel.classList.add('d-none');
+    }
+  },
+
+  /**
+   * サーバーからワークシート一覧（軽量）を取得してキャッシュする
+   *
+   * 取得後、単元フィルタードロップダウンを構築し、
+   * 現在の単元を自動選択してリストを表示する。
+   */
+  loadStudentWorksheetList: async () => {
+    var listEl = document.getElementById('studentWorksheetList');
+    if (listEl) listEl.innerHTML = '<div class="text-center py-4"><div class="spinner-border spinner-border-sm text-success"></div></div>';
+
+    try {
+      var list = await Server.call('getStudentWorksheetList');
+      State.studentWsList = list || [];
+
+      // --- 単元フィルターを構築 ---
+      var filterEl = document.getElementById('studentUnitFilter');
+      if (filterEl) {
+        // 単元名の一覧を抽出（重複排除）
+        var unitNames = [];
+        State.studentWsList.forEach(function(ws) {
+          if (ws.unitName && unitNames.indexOf(ws.unitName) === -1) {
+            unitNames.push(ws.unitName);
+          }
+        });
+
+        filterEl.innerHTML = '';
+        // 「すべて」オプション
+        var optAll = document.createElement('option');
+        optAll.value = '__all__';
+        optAll.textContent = 'すべての単元 (' + State.studentWsList.length + '件)';
+        filterEl.appendChild(optAll);
+
+        // 各単元オプション
+        unitNames.forEach(function(name) {
+          var opt = document.createElement('option');
+          opt.value = name;
+          var count = State.studentWsList.filter(function(ws) { return ws.unitName === name; }).length;
+          opt.textContent = name + ' (' + count + '件)';
+          filterEl.appendChild(opt);
+        });
+
+        // 現在の単元を自動選択
+        var currentUnit = (State.unitData && State.unitData.unitInfo) ? State.unitData.unitInfo.unitName : '';
+        if (currentUnit && unitNames.indexOf(currentUnit) !== -1) {
+          filterEl.value = currentUnit;
+        }
+      }
+
+      App.renderStudentWorksheetPanel();
+    } catch (e) {
+      console.error(e);
+      if (listEl) listEl.innerHTML = '<div class="text-center py-4 text-danger small">読み込みに失敗しました</div>';
+    }
+  },
+
+  /**
+   * ワークシート一覧をサイドパネルに描画する
+   *
+   * 単元フィルターの選択に応じて表示内容を絞り込む。
+   * 現在表示中のワークシートにはハイライトを付ける。
+   */
+  renderStudentWorksheetPanel: () => {
+    var listEl = document.getElementById('studentWorksheetList');
+    if (!listEl || !State.studentWsList) return;
+
+    // --- フィルター取得 ---
+    var filterEl = document.getElementById('studentUnitFilter');
+    var unitFilter = filterEl ? filterEl.value : '__all__';
+
+    // --- フィルタリング ---
+    var filtered = State.studentWsList;
+    if (unitFilter && unitFilter !== '__all__') {
+      filtered = State.studentWsList.filter(function(ws) {
+        return ws.unitName === unitFilter;
+      });
+    }
+
+    // --- 描画 ---
+    listEl.innerHTML = '';
+
+    if (filtered.length === 0) {
+      listEl.innerHTML = '<div class="text-center py-4 text-muted small">ワークシートがありません</div>';
+      return;
+    }
+
+    var currentTaskId = State.currentTask ? State.currentTask.id : '';
+
+    // 単元名でグループ化して表示
+    var lastUnit = '';
+    filtered.forEach(function(ws) {
+      // 単元名ヘッダー（「すべて」表示時のみ）
+      if (unitFilter === '__all__' && ws.unitName !== lastUnit) {
+        lastUnit = ws.unitName;
+        var header = document.createElement('div');
+        header.className = 'student-ws-unit-header';
+        header.innerHTML = '<i class="bi bi-folder2 me-1"></i>' + (ws.unitName || '（単元名なし）');
+        listEl.appendChild(header);
+      }
+
+      var item = document.createElement('button');
+      item.className = 'student-ws-item' + (ws.taskId === currentTaskId ? ' active' : '');
+      item.innerHTML =
+        '<div class="d-flex align-items-center">'
+        + (ws.taskId === currentTaskId ? '<i class="bi bi-caret-right-fill text-success me-2"></i>' : '<i class="bi bi-file-earmark-text me-2 text-muted"></i>')
+        + '<span class="text-truncate">' + (ws.stepTitle || '無題') + '</span>'
+        + '</div>';
+      item.onclick = function() { App.navigateToWorksheet(ws.taskId); };
+      listEl.appendChild(item);
+    });
+  },
+
+  /**
+   * 別のワークシートに遷移する（サイドパネルのクリックから呼ばれる）
+   *
+   * 現在と同じタスクIDなら何もしない。
+   * 異なる場合は loadFromHistory で新しいワークシートを読み込む。
+   *
+   * @param {string} taskId - 遷移先のタスクID
+   */
+  navigateToWorksheet: (taskId) => {
+    if (State.currentTask && State.currentTask.id === taskId) return;
+
+    // サイドパネルを閉じる
+    var panel = document.getElementById('studentSidebar');
+    if (panel) panel.classList.add('d-none');
+
+    // ワークシートを読み込む
+    App.loadFromHistory(taskId);
   }
 });
 </script>

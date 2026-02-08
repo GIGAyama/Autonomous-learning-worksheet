@@ -139,9 +139,12 @@
         <? if (mode === 'student') { ?> <span class="badge bg-success ms-2">児童モード</span> <? } ?>
       </a>
 
-      <!-- 児童用：ワークシート ↔ みんなの広場 切替スイッチ -->
+      <!-- 児童用：ワークシート一覧ボタン ＋ モード切替スイッチ -->
       <? if (mode === 'student') { ?>
-        <div class="ms-4 d-flex bg-white border rounded-pill p-1 shadow-sm">
+        <button class="btn btn-sm btn-outline-success rounded-pill ms-3" onclick="App.toggleStudentSidebar()">
+          <i class="bi bi-list-ul me-1"></i>一覧
+        </button>
+        <div class="ms-2 d-flex bg-white border rounded-pill p-1 shadow-sm">
            <button id="btnModeWork" class="btn btn-sm btn-primary rounded-pill px-3" onclick="App.toggleGalleryMode(false)">ワークシート</button>
            <button id="btnModePlaza" class="btn btn-sm btn-light rounded-pill px-3" onclick="App.toggleGalleryMode(true)">みんなの広場</button>
         </div>
@@ -318,6 +321,25 @@
            </div>
         </div>
       </aside>
+
+      <!-- ==========================================================
+           [4-5] 児童用ワークシート一覧サイドパネル
+           同じ単元のワークシートをリスト表示。クリックで遷移。
+           ========================================================== -->
+      <? if (mode === 'student') { ?>
+      <nav id="studentSidebar" class="student-sidebar d-none">
+        <div class="student-sidebar-header">
+          <h6 class="mb-0 fw-bold"><i class="bi bi-journal-text me-2"></i>ワークシート一覧</h6>
+          <button class="btn btn-sm btn-light" onclick="App.toggleStudentSidebar()"><i class="bi bi-x-lg"></i></button>
+        </div>
+        <div class="student-sidebar-filter">
+          <select id="studentUnitFilter" class="form-select form-select-sm" onchange="App.renderStudentWorksheetPanel()">
+            <option value="">読み込み中...</option>
+          </select>
+        </div>
+        <div id="studentWorksheetList" class="student-sidebar-list"></div>
+      </nav>
+      <? } ?>
 
     </div>
 

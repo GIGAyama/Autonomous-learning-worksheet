@@ -666,6 +666,78 @@ body.student-mode main {
   background-color: #f1f8e9;
 }
 
+/* --- 児童モード: ワークシート一覧サイドパネル --- */
+.student-sidebar {
+  position: absolute;
+  left: 0; top: 0;
+  width: 280px;
+  height: 100%;
+  background: #fff;
+  border-right: 1px solid #c8e6c9;
+  z-index: 1020;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 2px 0 8px rgba(0,0,0,0.08);
+  animation: slideInLeft 0.2s ease-out;
+}
+@keyframes slideInLeft {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(0); }
+}
+.student-sidebar-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  background: #e8f5e9;
+  border-bottom: 1px solid #c8e6c9;
+  flex-shrink: 0;
+}
+.student-sidebar-header h6 {
+  color: #2e7d32;
+  font-size: 0.9rem;
+}
+.student-sidebar-filter {
+  padding: 10px 12px;
+  border-bottom: 1px solid #eee;
+  flex-shrink: 0;
+}
+.student-sidebar-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+.student-ws-unit-header {
+  font-size: 0.75rem;
+  font-weight: bold;
+  color: #666;
+  padding: 10px 16px 4px;
+  background: #fafafa;
+  border-bottom: 1px solid #eee;
+}
+.student-ws-item {
+  display: block;
+  width: 100%;
+  border: none;
+  background: transparent;
+  text-align: left;
+  padding: 10px 16px;
+  font-size: 0.85rem;
+  color: #333;
+  cursor: pointer;
+  transition: background 0.15s;
+  border-bottom: 1px solid #f5f5f5;
+}
+.student-ws-item:hover {
+  background: #f1f8e9;
+}
+.student-ws-item.active {
+  background: #e8f5e9;
+  color: #2e7d32;
+  font-weight: bold;
+  border-left: 3px solid #4caf50;
+}
+
 /* --- 児童モード: 入力欄（ws-answer）のスタイル --- */
 /* 児童がタイピングできる欄を視覚的に区別する */
 body.student-mode .ws-answer {
@@ -724,7 +796,7 @@ body.student-mode .ws-answer:empty::before {
   }
 
   /* 不要なUI要素をすべて非表示 */
-  #sidebar, header, #editorToolbar, footer,
+  #sidebar, #studentSidebar, header, #editorToolbar, footer,
   #loadingOverlay, #contextMenu, .btn-float {
     display: none !important;
   }

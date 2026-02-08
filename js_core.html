@@ -246,7 +246,10 @@ const State = {
 
   /* --- 広場（ギャラリー） --- */
   isGalleryMode:       false, // 広場表示中かどうか
-  currentPeerResponse: null   // 詳細表示中の友達の回答データ
+  currentPeerResponse: null,  // 詳細表示中の友達の回答データ
+
+  /* --- 児童用ワークシート一覧 --- */
+  studentWsList:       null   // 配信済みワークシートの軽量リスト（キャッシュ）
 };
 
 
@@ -589,6 +592,14 @@ const App = {
             }
             if (typeof App.renderStudentToolbar === 'function') {
               App.renderStudentToolbar();
+            }
+            // ワークシート一覧のハイライトを更新
+            if (typeof App.renderStudentWorksheetPanel === 'function') {
+              if (State.studentWsList) {
+                App.renderStudentWorksheetPanel();
+              } else {
+                App.loadStudentWorksheetList();
+              }
             }
           }, 500);
         }
