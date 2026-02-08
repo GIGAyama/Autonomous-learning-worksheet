@@ -159,14 +159,12 @@
           <button class="btn btn-light text-secondary" onclick="Modals.openSettings()"><i class="bi bi-gear-fill"></i></button>
 
         <!-- ── 児童モードのボタン ── -->
+        <!--
+          ステータス切替（👍🔥🆘）と提出ボタンは
+          renderStudentToolbar() でワークシート内に表示されるため、
+          ヘッダーには配置しない（重複防止）。
+        -->
         <? } else { ?>
-          <!-- ステータス切替（順調 / 集中 / SOS）─ みらいコンパス連携 -->
-          <div class="btn-group me-2 shadow-sm" role="group" aria-label="Status Mode">
-            <button type="button" class="btn btn-sm btn-outline-secondary active" id="btnStatusNormal" onclick="App.changeStudentStatus('normal')" title="順調">👍</button>
-            <button type="button" class="btn btn-sm btn-outline-danger" id="btnStatusFocus" onclick="App.changeStudentStatus('focus')" title="集中">🔥</button>
-            <button type="button" class="btn btn-sm btn-outline-warning" id="btnStatusSos" onclick="App.changeStudentStatus('sos')" title="SOS">🆘</button>
-          </div>
-
           <!-- 広場への公開スイッチ -->
           <div class="form-check form-switch me-3" title="広場に公開するかどうか">
             <input class="form-check-input" type="checkbox" id="isPublicCheck" checked>
@@ -176,9 +174,8 @@
           <span id="autoSaveIndicator" class="text-muted small me-2"><i class="bi bi-cloud-check"></i> 保存済</span>
           <!-- 名前入力 -->
           <input type="text" id="studentNameInput" class="form-control form-control-sm" placeholder="名前" style="width:120px;">
-          <!-- 保存・提出ボタン -->
+          <!-- 一時保存ボタン（提出はワークシート内ツールバーにある） -->
           <button class="btn btn-outline-primary btn-sm rounded-pill" onclick="App.submitStudentResponse('draft')">一時保存</button>
-          <button class="btn btn-success btn-sm rounded-pill fw-bold" onclick="App.submitStudentResponse('submitted')">提出</button>
         <? } ?>
       </div>
     </header>
