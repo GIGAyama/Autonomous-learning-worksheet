@@ -1,0 +1,814 @@
+<script>
+/**
+ * ============================================================
+ *  みらいパスポート v3.0.0 — 教師モード (js_teacher.html)
+ * ============================================================
+ *
+ * ■ このファイルの役割
+ *   教師（先生）が使う画面のロジックを定義します。
+ *   js_core.html で定義された App オブジェクトに、
+ *   Object.assign で教師専用の関数を追加します。
+ *   また、教師専用の Modals オブジェクトを新規に定義します。
+ *
+ * ■ 含まれる機能
+ *   1. 教師モードの初期化        — セットアップ確認・エディタ起動
+ *   2. モーダル管理（Modals）     — 設定・計画読込・資料読込・評価・提出状況
+ *   3. 計画データの読込          — JSON形式の単元計画インポート
+ *   4. タスク一覧管理            — サイドバーのタスク表示・全選択
+ *   5. AI ワークシート生成       — 単体生成・一括生成・プロンプト構築
+ *   6. 一括印刷                  — 選択したタスクをまとめて印刷
+ *   7. コンパス連携インポート    — みらいコンパスからの単元計画取り込み
+ *   8. 添削（グレーディング）    — 児童の回答に赤ペンで書き込み・返却
+ *   9. ルーブリック              — AI評価基準作成・保存
+ *  10. 共有URL生成               — 児童への配布用URLをコピー
+ *
+ * ■ 読み込み順序
+ *   js_core.html → js_student.html → このファイル
+ *
+ * ============================================================
+ */
+
+
+/* ============================================================
+ *  1. Modals — モーダルダイアログ管理
+ * ============================================================
+ *
+ * 各種設定画面・読込画面をモーダルで開閉する。
+ * index.html 内の各モーダルHTML要素に対応している。
+ */
+const Modals = {
+  /** 設定モーダルを開く（APIキー・教師名・コンパスURL） */
+  openSettings: () => {
+    new bootstrap.Modal(document.getElementById('settingsModal')).show();
+  },
+
+  /** 計画読込モーダルを開く（JSON形式の単元計画インポート） */
+  openImport: () => {
+    new bootstrap.Modal(document.getElementById('importModal')).show();
+  },
+
+  /** 資料読込モーダルを開く（PDF/画像ファイルのOCR読み込み） */
+  openPdfImport: () => {
+    new bootstrap.Modal(document.getElementById('pdfImportModal')).show();
+  },
+
+  /**
+   * 評価基準（ルーブリック）モーダルを開く
+   * タスクが選択されていない場合は警告を表示する
+   */
+  openRubric: () => {
+    if (!State.currentTask) {
+      return Swal.fire('エラー', '授業を選択してください', 'warning');
+    }
+
+    // 既存のルーブリックがあれば表示、なければプレースホルダー
+    var container = document.getElementById('rubricContainer');
+    container.innerHTML = State.currentTask.rubricHtml
+      || '<div class="text-center py-5 text-muted"><p class="mb-0">「AI作成」ボタンを押して評価基準を作成してください。</p></div>';
+
+    new bootstrap.Modal(document.getElementById('rubricModal')).show();
+  },
+
+  /**
+   * 提出状況ダッシュボードを開く
+   *
+   * サーバーから現在のタスクに対する全児童の提出データを取得し、
+   * カード形式のグリッドで一覧表示する。
+   * 各カードをクリックすると添削画面が開く。
+   *
+   * → 読み込み元: Responses シート（code.gs の getTaskSubmissions）
+   */
+  openDashboard: async () => {
+    if (!State.currentTask) {
+      return Swal.fire('エラー', '授業を選択してください', 'warning');
+    }
+
+    UI.showLoading("提出状況を取得中...");
+    try {
+      var subs = await Server.call('getTaskSubmissions', State.currentTask.id);
+      if (!subs) subs = [];
+
+      // 取得したデータをグローバルに保持（添削で使うため）
+      State.dashboardData = subs;
+
+      var grid = document.getElementById('dashboardGrid');
+      grid.innerHTML = '';
+
+      if (subs.length === 0) {
+        grid.innerHTML = '<div class="col-12 text-center py-5 text-muted">提出された回答はありません</div>';
+      } else {
+        // 各児童の回答をカード形式で表示
+        subs.forEach(function(s, index) {
+          var col = document.createElement('div');
+          col.className = 'col-md-3 col-sm-6';
+
+          // ステータスに応じたバッジ
+          var statusBadge = (s.status === 'graded')
+            ? '<span class="badge bg-primary">添削済</span>'
+            : '<span class="badge bg-success">提出済</span>';
+
+          // サムネイル画像（なければ「No Image」）
+          var imgHtml = s.canvasImage
+            ? '<img src="' + s.canvasImage + '" style="max-height:100%; max-width:100%; object-fit:contain;">'
+            : '<span class="text-muted small">No Image</span>';
+
+          col.innerHTML =
+            '<div class="card h-100 shadow-sm" style="cursor:pointer;" onclick="App.openGrading(' + index + ')">'
+            + '<div class="card-img-top bg-light d-flex align-items-center justify-content-center" style="height:150px; overflow:hidden;">'
+            + imgHtml + '</div>'
+            + '<div class="card-body p-2">'
+            + '<h6 class="card-title fw-bold mb-1 text-truncate">' + s.studentName + '</h6>'
+            + '<div class="d-flex justify-content-between align-items-center">'
+            + statusBadge
+            + '<small class="text-muted" style="font-size:0.7em">' + new Date(s.submittedAt).toLocaleTimeString() + '</small>'
+            + '</div></div></div>';
+
+          grid.appendChild(col);
+        });
+      }
+
+      new bootstrap.Modal(document.getElementById('dashboardModal')).show();
+    } finally {
+      UI.hideLoading();
+    }
+  }
+};
+
+
+/* ============================================================
+ *  2. App への教師モード機能の追加
+ * ============================================================ */
+Object.assign(App, {
+
+  /* ==========================================================
+   *  2-1. 教師モードの初期化
+   * ==========================================================
+   *
+   * App.init() から呼ばれる。以下の処理を行う:
+   *   - データベースのセットアップ確認
+   *   - 設定の読み込み
+   *   - リッチエディタの初期化
+   *   - コンパス連携のインポートチェック
+   */
+
+  /**
+   * 教師モードの起動処理
+   *
+   * @param {string} importId - コンパスからのインポートID（未使用なら空文字）
+   */
+  initTeacherMode: async (importId) => {
+    UI.showLoading("システムを起動しています", "ユーザー設定を確認中...");
+
+    // データベースのセットアップ確認
+    var status = await Server.call('checkSetupStatus');
+
+    if (status.isSetup) {
+      // --- セットアップ済み: 通常起動 ---
+      document.getElementById('setupWizard').classList.add('d-none');
+      document.getElementById('appContainer').classList.remove('d-none');
+
+      // ユーザー設定を読み込み
+      await App.loadConfig();
+      // リッチエディタ（右クリックメニュー等）を初期化
+      Editor.init();
+
+      if (importId) {
+        // コンパスからの連携インポートがある場合
+        App.startImportWizard(importId);
+      } else {
+        // レガシー: URLパラメータ taskIds による自動生成チェック
+        setTimeout(App.checkAutoGenerate, 800);
+      }
+    } else {
+      // --- 未セットアップ: 初期化画面を表示 ---
+      UI.hideLoading();
+      document.getElementById('setupWizard').classList.remove('d-none');
+    }
+  },
+
+
+  /* ==========================================================
+   *  2-2. 計画データの読込（JSONインポート）
+   * ========================================================== */
+
+  /**
+   * JSONテキストを解析して単元計画データとして読み込む
+   *
+   * 計画読込モーダルの「解析」ボタンから呼ばれる。
+   * JSON内に { tasks: [...] } 配列が必須。
+   * 読み込んだデータは State.unitData に保存され、
+   * サイドバーにタスク一覧が表示される。
+   */
+  processImport: () => {
+    try {
+      var inputVal = document.getElementById('jsonInput').value;
+
+      // JSON部分を抽出（前後に余計なテキストがあっても対応）
+      var firstBrace = inputVal.indexOf('{');
+      var lastBrace  = inputVal.lastIndexOf('}');
+      if (firstBrace === -1 || lastBrace === -1) {
+        throw new Error("有効なJSONデータが見つかりません。");
+      }
+
+      var jsonString = inputVal.substring(firstBrace, lastBrace + 1);
+      var json = JSON.parse(jsonString);
+
+      // tasks 配列の存在チェック
+      if (!json.tasks || !Array.isArray(json.tasks)) {
+        throw new Error("JSONデータに 'tasks' 配列が含まれていません。");
+      }
+
+      // State に保存してサイドバーを更新
+      State.unitData = json;
+      App.renderTaskList();
+
+      // モーダルを閉じる
+      bootstrap.Modal.getInstance(document.getElementById('importModal')).hide();
+      UI.toast('計画を読み込みました');
+    } catch (e) {
+      console.error(e);
+      Swal.fire({ icon: 'error', title: 'JSON読み込みエラー', text: e.message });
+    }
+  },
+
+  /**
+   * サンプルのJSONデータをテキストエリアに挿入する
+   * 計画読込モーダルの「サンプル」ボタンから呼ばれる
+   */
+  loadSampleJson: () => {
+    var sample = {
+      "unitInfo": { "subject": "国語", "grade": 5, "unitName": "注文の多い料理店" },
+      "tasks": [
+        { "id": "t1", "category": "つかむ", "title": "導入: 扉の向こうへ", "description": "物語の入り口を読む" },
+        { "id": "t2", "category": "まなぶ", "title": "色と音の表現", "description": "宮沢賢治の表現技法を探す" }
+      ]
+    };
+    document.getElementById('jsonInput').value = JSON.stringify(sample, null, 2);
+  },
+
+
+  /* ==========================================================
+   *  2-3. タスク一覧管理（サイドバー）
+   * ========================================================== */
+
+  /**
+   * サイドバーにタスク一覧を描画する
+   *
+   * State.unitData.tasks の内容をリスト表示する。
+   * 各タスクにはチェックボックス（一括操作用）と
+   * クリック時のタスク選択機能がある。
+   */
+  renderTaskList: () => {
+    var list = document.getElementById('taskList');
+    list.innerHTML = '';
+
+    if (!State.unitData || !State.unitData.tasks) return;
+
+    // タスク件数を表示
+    document.getElementById('taskCount').innerText = State.unitData.tasks.length + '件';
+
+    State.unitData.tasks.forEach(function(task) {
+      var div = document.createElement('div');
+      div.className = 'list-group-item d-flex p-2 align-items-center';
+      div.innerHTML =
+        '<div class="me-2">'
+        + '<input class="form-check-input task-checkbox" type="checkbox" value="' + task.id + '" checked>'
+        + '</div>'
+        + '<button class="btn btn-link text-start text-dark p-0 w-100 text-decoration-none shadow-none" type="button">'
+        + '<div class="d-flex justify-content-between align-items-center">'
+        + '<small class="badge bg-secondary rounded-pill">' + (task.category || '学習') + '</small>'
+        + '<small class="text-muted">' + (task.step || '') + '</small>'
+        + '</div>'
+        + '<div class="fw-bold text-truncate small mt-1">' + (task.title || '無題') + '</div>'
+        + '</button>';
+
+      // クリックでタスクを選択
+      var btn = div.querySelector('button');
+      btn.onclick = function() { App.selectTaskById(task.id); };
+      list.appendChild(div);
+    });
+  },
+
+  /**
+   * 全選択/全解除チェックボックスの切り替え
+   * @param {HTMLInputElement} cb - 全選択チェックボックス要素
+   */
+  toggleSelectAll: (cb) => {
+    document.querySelectorAll('.task-checkbox').forEach(function(box) {
+      box.checked = cb.checked;
+    });
+  },
+
+
+  /* ==========================================================
+   *  2-4. AI ワークシート生成
+   * ==========================================================
+   *
+   * Gemini AI を使ってワークシートのHTML本文を自動生成する。
+   * 単体生成（選択中のタスク1件）と一括生成（複数タスク）に対応。
+   */
+
+  /**
+   * 選択中のタスクのワークシートをAIで生成する（単体生成）
+   *
+   * クライアント側でプロンプトを組み立て、サーバーの callGeminiAPI に送信する。
+   * AIコーチング要素（めあて・ヒント・自己評価）を含むHTMLを生成する。
+   *
+   * → 書き込み先: Worksheets シート（生成後に自動保存）
+   *
+   * @param {boolean} [useOcr=false] - OCR読み取りテキストを参考資料として含めるか
+   */
+  generateSingleWorksheet: async (useOcr) => {
+    if (!useOcr) useOcr = false;
+    if (!State.currentTask) return;
+
+    UI.showLoading("AIが執筆中です", "レイアウトを構成しています...");
+    try {
+      // OCR テキストがあれば追加コンテキストとして挿入
+      var extraContext = "";
+      if (useOcr && State.ocrCache) {
+        extraContext = '\n【参考資料テキスト】\n' + State.ocrCache.substring(0, 1500)
+          + '...\n※この資料の内容を授業に反映させてください。';
+      }
+
+      var info        = State.unitData ? (State.unitData.unitInfo || {}) : { grade: "", unitName: "" };
+      var description = State.currentTask.description || "";
+
+      // --- AIプロンプトの構築（AIコーチング要素つき） ---
+      var prompt =
+        'あなたは日本の小学校教師です。以下の授業情報から、児童が自立的に取り組むためのワークシートHTMLを作成してください。\n\n'
+        + '【授業情報】\n'
+        + '学年: ' + (info.grade || '') + '\n'
+        + '単元名: ' + (info.unitName || '') + '\n'
+        + '授業タイトル: ' + State.currentTask.title + '\n'
+        + '活動内容: ' + description + '\n'
+        + extraContext + '\n\n'
+        + '【出力HTMLの構成（厳守）】\n'
+        + '以下の構造を使用し、AIコーチング要素（ヒント、めあて）を盛り込んでください。\n'
+        + 'Markdown記法は禁止です。\n\n'
+        // ヘッダー部分のテンプレート
+        + '<!-- 1. ヘッダー -->\n'
+        + '<div class="ws-header" style="display:flex; justify-content:space-between; align-items:end; border-bottom: 3px double #555; padding-bottom: 10px; margin-bottom: 20px; font-family: \'Zen Maru Gothic\', sans-serif;">\n'
+        + '   <div><span style="background:#333; color:#fff; padding:2px 8px; border-radius:4px; font-size:0.7em; margin-right:5px;">' + (info.grade || '') + '</span>'
+        + '<span style="font-weight:bold;">' + (info.unitName || '') + '</span></div>\n'
+        + '   <div style="text-align:right;">年 組 名前 __________________</div>\n'
+        + '</div>\n\n'
+        // タイトル & めあて
+        + '<!-- 2. タイトル & めあて -->\n'
+        + '<h1 style="text-align:center; font-size:1.8em; margin-bottom:20px;">' + State.currentTask.title + '</h1>\n'
+        + '<div style="background:#e3f2fd; padding:10px; border-radius:8px; margin-bottom:20px; border-left:5px solid #2196f3;">\n'
+        + '   <strong>今日のめあて:</strong> (活動内容から子供向けのめあてを生成)\n'
+        + '</div>\n\n'
+        // AIヒント
+        + '<!-- 3. AIヒント (Coaching) -->\n'
+        + '<div style="background:#fff3e0; padding:10px; border-radius:8px; margin-bottom:20px; font-size:0.9em; color:#e65100;">\n'
+        + '   <strong><i class="bi bi-lightbulb-fill"></i> AIコーチのヒント:</strong>\n'
+        + '   (この活動でつまずきやすい点や、考えるためのヒントを1-2行で記述)\n'
+        + '</div>\n\n'
+        // 本文エリア
+        + '<!-- 4. 本文エリア -->\n'
+        + '<div style="min-height: 350px;">\n'
+        + '  (学習課題・問い・記述欄を生成。クラス名: ws-box, ws-lines, rich-editor 等を活用)\n'
+        + '</div>\n\n'
+        // フッター（自己評価）
+        + '<!-- 5. フッター (スタンプ) -->\n'
+        + '<div style="margin-top: 30px; border-top: 2px dashed #ccc; padding-top: 15px; display: flex; gap: 15px;">\n'
+        + '  <div style="flex: 6;">\n'
+        + '    <div style="font-weight:bold; font-size:0.9em;">■ ふりかえり</div>\n'
+        + '    <div class="ws-lines" style="height: 4.5em; background-image: linear-gradient(#ccc 1px, transparent 1px); background-size: 100% 1.5em;"></div>\n'
+        + '  </div>\n'
+        + '  <div style="flex: 4;">\n'
+        + '    <div style="font-weight:bold; font-size:0.9em;">■ 自己評価</div>\n'
+        + '    <table class="table table-bordered table-sm mb-0" style="font-size: 0.75em; text-align:center;">\n'
+        + '      <tr><td class="bg-light">わかった</td><td><span class="eval-btn">◎</span><span class="eval-btn">◯</span><span class="eval-btn">△</span></td></tr>\n'
+        + '      <tr><td class="bg-light">考えた</td><td><span class="eval-btn">◎</span><span class="eval-btn">◯</span><span class="eval-btn">△</span></td></tr>\n'
+        + '      <tr><td class="bg-light">進んで</td><td><span class="eval-btn">◎</span><span class="eval-btn">◯</span><span class="eval-btn">△</span></td></tr>\n'
+        + '    </table>\n'
+        + '  </div>\n'
+        + '</div>';
+
+      // --- AIに送信してHTML生成 ---
+      var html = await Server.call('callGeminiAPI', prompt);
+      html = App.cleanAIOutput(html);
+
+      // --- 生成結果をサーバーに保存 ---
+      await Server.call('saveWorksheetToDB', {
+        taskId:      State.currentTask.id,
+        unitName:    info.unitName,
+        stepTitle:   State.currentTask.title,
+        htmlContent: html,
+        jsonSource:  State.currentTask
+      });
+
+      // タスクを再選択して画面を更新
+      App.selectTask(State.currentTask);
+
+    } catch (e) {
+      console.error(e);
+      Swal.fire('生成エラー', 'AIによる生成に失敗しました。', 'error');
+    } finally {
+      UI.hideLoading();
+    }
+  },
+
+  /**
+   * 複数タスクのワークシートを一括でAI生成する
+   *
+   * targetTaskIds が渡された場合（コンパス連携）はそのIDリストを使用し、
+   * 渡されない場合はサイドバーでチェックされたタスクを対象にする。
+   *
+   * → 書き込み先: Worksheets シート（各タスクごとに保存）
+   *
+   * @param {string[]|null} [targetTaskIds=null] - 生成対象のタスクID配列
+   */
+  startBatchGeneration: async (targetTaskIds) => {
+    if (!targetTaskIds) targetTaskIds = null;
+    var queue = [];
+
+    if (targetTaskIds && Array.isArray(targetTaskIds)) {
+      // --- コンパス連携: IDリストからDBデータを取得してキューに追加 ---
+      for (var t = 0; t < targetTaskIds.length; t++) {
+        var tid = targetTaskIds[t];
+        var data = await Server.call('loadWorksheetFromDB', tid);
+        if (data) {
+          queue.push({
+            id:          data.taskId,
+            title:       data.stepTitle,
+            description: (data.jsonSource && data.jsonSource.description) ? data.jsonSource.description : data.stepTitle,
+            unitName:    data.unitName,
+            jsonSource:  data.jsonSource
+          });
+        }
+      }
+    } else {
+      // --- サイドバーのチェックボックスから対象を取得 ---
+      var checkboxes = document.querySelectorAll('.task-checkbox:checked');
+      if (checkboxes.length === 0) {
+        return Swal.fire('選択なし', '生成するタスクを選択してください', 'info');
+      }
+      queue = Array.from(checkboxes).map(function(cb) {
+        return State.unitData.tasks.find(function(task) { return task.id === cb.value; });
+      });
+    }
+
+    if (queue.length === 0) return;
+    if (!confirm(queue.length + '件のワークシートを一括生成しますか？')) return;
+
+    // --- 一括生成ループ ---
+    UI.showLoading("一括生成を開始します", "AIが執筆中...");
+    UI.toggleBatchProgress(true);
+
+    try {
+      for (var i = 0; i < queue.length; i++) {
+        var task = queue[i];
+
+        // 進捗バーを更新
+        UI.updateBatchProgress(
+          Math.round((i / queue.length) * 100),
+          (i + 1) + ' / ' + queue.length + ': ' + task.title
+        );
+
+        try {
+          // サーバーサイドの generateSingleWorksheet（AIコーチング版）を使用
+          var html = await Server.call('generateSingleWorksheet', {
+            unitName:    task.unitName || (State.unitData ? (State.unitData.unitInfo || {}).unitName : "単元"),
+            stepTitle:   task.title,
+            description: task.description
+          });
+
+          var jsonSrc = task.jsonSource || { id: task.id, title: task.title, description: task.description };
+
+          // 生成結果を保存
+          await Server.call('saveWorksheetToDB', {
+            taskId:      task.id,
+            unitName:    task.unitName || (State.unitData ? (State.unitData.unitInfo || {}).unitName : ""),
+            stepTitle:   task.title,
+            htmlContent: html,
+            jsonSource:  jsonSrc
+          });
+        } catch (e) {
+          console.error('Task ' + task.title + ' failed:', e);
+          // 個別タスクの失敗は記録して続行する
+        }
+
+        // API負荷軽減のため1秒待機
+        await new Promise(function(r) { setTimeout(r, 1000); });
+      }
+
+      UI.updateBatchProgress(100, '完了');
+      App.loadHistory();
+      UI.toast('一括生成が完了しました');
+
+      // URLパラメータのクリーンアップ（連携パラメータを除去）
+      if (targetTaskIds) {
+        var cleanUrl = window.location.pathname + "?mode=teacher";
+        window.history.pushState({ path: cleanUrl }, '', cleanUrl);
+      }
+
+    } finally {
+      setTimeout(function() {
+        UI.toggleBatchProgress(false);
+        UI.hideLoading();
+      }, 1000);
+    }
+  },
+
+
+  /* ==========================================================
+   *  2-5. 一括印刷
+   * ========================================================== */
+
+  /**
+   * サイドバーで選択されたタスクをまとめて印刷する
+   *
+   * チェックされたタスクのワークシートを一括取得し、
+   * Printer.run() で印刷プレビューウィンドウを開く。
+   */
+  startBatchPrint: async () => {
+    var checkboxes = document.querySelectorAll('.task-checkbox:checked');
+    if (checkboxes.length === 0) {
+      return Swal.fire('選択なし', '印刷するタスクを選択してください', 'info');
+    }
+
+    var taskIds = Array.from(checkboxes).map(function(cb) { return cb.value; });
+
+    UI.showLoading("印刷データを準備中...");
+    try {
+      var sheets = await Server.call('getWorksheetsByIds', taskIds);
+      var pages = sheets.map(function(s) {
+        return { html: s.htmlContent, img: null };
+      });
+      Printer.run(pages);
+    } finally {
+      UI.hideLoading();
+    }
+  },
+
+
+  /* ==========================================================
+   *  2-6. みらいコンパス連携インポート
+   * ========================================================== */
+
+  /**
+   * コンパスからのインポートを処理するウィザードを開始する
+   *
+   * URLに importId パラメータがある場合に initTeacherMode から呼ばれる。
+   * ImportQueue シートからデータを取得し、AI一括生成するか確認する。
+   *
+   * → 読み込み元: ImportQueue シート（code.gs の consumeImportQueue）
+   * → 書き込み先: Worksheets シート（一括生成時）
+   *
+   * @param {string} importId - コンパスからのインポートID
+   */
+  startImportWizard: async (importId) => {
+    UI.showLoading("連携データを確認中...", "単元計画を読み込んでいます");
+    try {
+      var res = await Server.call('consumeImportQueue', importId);
+
+      if (res.success) {
+        // unitData を構成
+        State.unitData = {
+          unitInfo: { unitName: res.unitName || "連携単元" },
+          tasks: res.taskIds.map(function(id) {
+            return { id: id, title: "読み込み中..." };
+          })
+        };
+
+        // AI一括生成するか確認
+        Swal.fire({
+          title: 'ワークシート作成連携',
+          text: 'みらいコンパスから ' + res.taskIds.length + ' 件の活動データを取り込みました。AIでワークシートを一括作成しますか？',
+          icon: 'question',
+          showCancelButton: true,
+          confirmButtonText: 'AI作成を開始',
+          cancelButtonText: '手動で作成'
+        }).then(function(result) {
+          if (result.isConfirmed) {
+            App.startBatchGeneration(res.taskIds);
+          } else {
+            // 手動作成: 通常画面へリロード
+            window.location.href = window.location.pathname + "?mode=teacher";
+          }
+        });
+      } else {
+        Swal.fire('連携エラー', res.message, 'error').then(function() {
+          window.location.href = window.location.pathname + "?mode=teacher";
+        });
+      }
+    } catch(e) {
+      console.error(e);
+      UI.hideLoading();
+    }
+  },
+
+  /**
+   * レガシー: URLパラメータ taskIds による自動生成チェック
+   *
+   * 古いバージョンとの互換性のために残している処理。
+   * URLに taskIds=id1,id2,... がある場合、未生成のものを検出して
+   * AI一括生成を提案する。
+   */
+  checkAutoGenerate: async () => {
+    var params = new URLSearchParams(window.location.search);
+    var taskIdsStr = params.get('taskIds');
+    if (!taskIdsStr) return;
+
+    var taskIds = taskIdsStr.split(',').filter(function(id) { return id; });
+    if (taskIds.length === 0) return;
+
+    UI.showLoading("連携データを確認中...");
+    try {
+      var sheets = await Server.call('getWorksheetsByIds', taskIds);
+      var unfinishedTasks = sheets.filter(function(s) {
+        return !s.htmlContent || s.htmlContent.trim() === "";
+      });
+
+      if (unfinishedTasks.length > 0) {
+        // State を構成
+        if (!State.unitData) {
+          State.unitData = {
+            unitInfo: { unitName: unfinishedTasks[0].unitName || "連携単元" },
+            tasks: unfinishedTasks.map(function(t) {
+              return { id: t.taskId, title: t.stepTitle, description: "" };
+            })
+          };
+        }
+
+        Swal.fire({
+          title: 'ワークシート作成',
+          text: unfinishedTasks.length + ' 件の未作成ワークシートがあります。AIで一括生成しますか？',
+          icon: 'question',
+          showCancelButton: true,
+          confirmButtonText: '生成を開始',
+          cancelButtonText: 'あとで'
+        }).then(function(result) {
+          if (result.isConfirmed) {
+            App.startBatchGeneration(unfinishedTasks.map(function(t) { return t.taskId; }));
+          } else {
+            var newUrl = window.location.pathname + "?mode=teacher";
+            window.history.pushState({ path: newUrl }, '', newUrl);
+          }
+        });
+      }
+    } catch(e) {
+      console.error(e);
+    } finally {
+      UI.hideLoading();
+    }
+  },
+
+
+  /* ==========================================================
+   *  2-7. 添削（グレーディング）
+   * ==========================================================
+   *
+   * 児童の回答をフルスクリーンで表示し、
+   * Fabric.js のキャンバスで赤ペン添削を行う。
+   * 添削結果はコメントとともにサーバーに保存される。
+   */
+
+  /**
+   * 添削画面を開く（ダッシュボードのカードクリックから呼ばれる）
+   *
+   * State.dashboardData[index] の回答データを読み込み、
+   * ワークシートの上に赤ペン描画用のキャンバスを重ねて表示する。
+   *
+   * @param {number} index - State.dashboardData 内のインデックス
+   */
+  openGrading: (index) => {
+    var s = State.dashboardData[index];
+    State.gradingRow = s.rowIndex;
+
+    // ダッシュボードモーダルを閉じる
+    bootstrap.Modal.getInstance(document.getElementById('dashboardModal')).hide();
+
+    // 添削エリアにワークシート＋キャンバスをセット
+    var container = document.getElementById('gradingContainer');
+    container.innerHTML =
+      '<div id="gradingPaper" class="sheet shadow-sm">'
+      + '<div class="p-5">' + document.getElementById('worksheetContent').innerHTML + '</div>'
+      + '</div>'
+      + '<canvas id="gradingCanvas"></canvas>';
+
+    // 添削モーダルを開く
+    new bootstrap.Modal(document.getElementById('gradingModal')).show();
+
+    // モーダルが表示されてからキャンバスを初期化（レイアウト確定後）
+    setTimeout(function() {
+      var paper = document.getElementById('gradingPaper');
+      var cv    = document.getElementById('gradingCanvas');
+
+      // キャンバスを用紙と同じサイズにする
+      cv.width  = paper.offsetWidth;
+      cv.height = paper.offsetHeight;
+      cv.style.position = 'absolute';
+      cv.style.top  = paper.offsetTop + 'px';
+      cv.style.left = paper.offsetLeft + 'px';
+      cv.style.zIndex = 99;
+
+      // 赤ペン描画モードのFabricキャンバスを作成
+      var gCanvas = new fabric.Canvas('gradingCanvas', { isDrawingMode: true });
+      gCanvas.freeDrawingBrush.width = 3;
+      gCanvas.freeDrawingBrush.color = "red";
+
+      // 児童の既存描画データを読み込む
+      if (s.canvasJson) gCanvas.loadFromJSON(s.canvasJson);
+
+      State.gradingCanvas = gCanvas;
+
+      // ヘッダーに児童名を表示
+      document.getElementById('gradingTitle').innerText = s.studentName + ' さんの回答';
+      // 前回のコメントがあれば表示
+      document.getElementById('feedbackTextInput').value = s.feedbackText || "";
+    }, 500);
+  },
+
+  /**
+   * 添削結果を保存して返却する
+   *
+   * 赤ペン描画データとコメントをサーバーに送信する。
+   * → 書き込み先: Responses シートの H列(status)・I列(feedbackText)・L列(canvasJson)
+   */
+  saveGrading: async () => {
+    if (!State.gradingRow) return;
+
+    UI.showLoading("返却しています", "コメントと添削内容を保存中...");
+    try {
+      await Server.call('saveFeedback', {
+        rowIndex:     State.gradingRow,
+        feedbackText: document.getElementById('feedbackTextInput').value,
+        canvasJson:   JSON.stringify(State.gradingCanvas.toJSON())
+      });
+      bootstrap.Modal.getInstance(document.getElementById('gradingModal')).hide();
+      UI.toast("返却しました");
+    } finally {
+      UI.hideLoading();
+    }
+  },
+
+
+  /* ==========================================================
+   *  2-8. ルーブリック（評価基準）
+   * ========================================================== */
+
+  /**
+   * AIでルーブリック（評価基準表）を生成する
+   * ルーブリックモーダルの「AI作成」ボタンから呼ばれる
+   *
+   * → 通信先: code.gs の generateRubricAI → Gemini API
+   */
+  generateRubric: async () => {
+    UI.showLoading("ルーブリック作成中...");
+    try {
+      var html = await Server.call('generateRubricAI', {
+        unitName:    "",
+        stepTitle:   State.currentTask.title,
+        description: State.currentTask.description
+      });
+      html = App.cleanAIOutput(html);
+      document.getElementById('rubricContainer').innerHTML = html;
+    } finally {
+      UI.hideLoading();
+    }
+  },
+
+  /**
+   * ルーブリックを保存する
+   * ルーブリックモーダルの「保存」ボタンから呼ばれる
+   *
+   * → 書き込み先: Worksheets シートの H列（rubricHtml）
+   */
+  saveRubric: () => {
+    State.currentTask.rubricHtml = document.getElementById('rubricContainer').innerHTML;
+    App.saveCurrentWorksheet();
+    bootstrap.Modal.getInstance(document.getElementById('rubricModal')).hide();
+  },
+
+
+  /* ==========================================================
+   *  2-9. 共有URL & OCR
+   * ========================================================== */
+
+  /**
+   * 児童への配布用URLを生成してモーダルに表示する
+   *
+   * URLは「WebアプリURL?mode=student&taskId=XXX」の形式。
+   * コピーボタンでクリップボードにコピーできる。
+   */
+  showShareUrl: async () => {
+    if (!State.currentTask) return;
+    var url = await Server.call('getWebAppUrl');
+    var shareUrl = url + '?mode=student&taskId=' + State.currentTask.id;
+    document.getElementById('shareUrlInput').value = shareUrl;
+    new bootstrap.Modal(document.getElementById('shareModal')).show();
+  },
+
+  /**
+   * OCR（文字認識）インポート処理のプレースホルダー
+   * 将来的にPDF/画像からテキストを抽出する機能を実装予定
+   */
+  processOcrImport: async () => {
+    /* OCR placeholder — 将来実装予定 */
+  }
+});
+</script>
