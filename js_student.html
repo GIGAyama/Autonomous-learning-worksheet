@@ -549,7 +549,8 @@ Object.assign(App, {
   /**
    * 児童用ツールバーを用紙内に表示する
    *
-   * タスク名・SOSボタン・集中ボタン・一時保存ボタン・提出ボタンを含む。
+   * タスク名・SOSボタン・集中ボタン・提出ボタンを含む。
+   * ※一時保存は autoSaveLocal() で自動的に行われるためボタン不要。
    * 既に存在する場合は一度削除してから再作成する。
    */
   renderStudentToolbar: () => {
@@ -577,8 +578,6 @@ Object.assign(App, {
       + '<i class="bi bi-exclamation-circle-fill me-1"></i>SOS</button>'
       + '<button class="btn btn-outline-info rounded-pill px-3 btn-sm fw-bold" onclick="App.changeStudentStatus(\'focus\')">'
       + '<i class="bi bi-lightning-fill me-1"></i>集中</button>'
-      + '<button class="btn btn-outline-primary rounded-pill px-3 btn-sm fw-bold" onclick="App.submitStudentResponse(\'draft\')">'
-      + '<i class="bi bi-save me-1"></i>一時保存</button>'
       + '<button class="btn btn-success rounded-pill px-4 btn-sm fw-bold shadow-sm" onclick="App.submitStudentResponse(\'submitted\')">'
       + '<i class="bi bi-send-fill me-1"></i>提出</button>'
       + '</div>';
