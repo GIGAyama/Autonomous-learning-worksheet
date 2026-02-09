@@ -81,30 +81,65 @@
 
   <!-- ============================================================
        [2] ローディング画面
-       パスポートがめくれるアニメーション付きオーバーレイ。
+       パスポートのページがパラパラめくれるアニメーション。
        Server.call() 実行中に UI.showLoading() で表示される。
+       5枚のページがそれぞれ異なるスタンプデザインを持つ。
        ============================================================ -->
   <div id="loadingOverlay" class="d-none">
-    <div class="scene">
-      <div class="passport">
-        <!-- パスポート本体 -->
-        <div class="pp-sheet back-plate"></div>
-        <div class="pp-sheet base-left"></div>
-        <div class="pp-sheet base-right"></div>
-        <!-- めくれるページ（3 枚） -->
-        <div class="pp-sheet flipping-page"><div class="pp-face front design-1"></div><div class="pp-face back"></div></div>
-        <div class="pp-sheet flipping-page"><div class="pp-face front design-2"></div><div class="pp-face back"></div></div>
-        <div class="pp-sheet flipping-page"><div class="pp-face front design-3"></div><div class="pp-face back"></div></div>
-      </div>
-      <!-- テキスト表示エリア -->
-      <div class="loading-container">
-        <div class="loading-label" id="loadingText">準備中...</div>
-        <div class="loading-subtext" id="loadingSubText">しばらくお待ちください</div>
-        <!-- 一括処理時のプログレスバー（通常は非表示） -->
-        <div id="batchProgressContainer" class="d-none mt-3" style="width: 200px; margin: 0 auto;">
-          <div class="progress" style="height: 6px;"><div id="batchProgressBar" class="progress-bar bg-info" style="width:0%"></div></div>
-          <small id="batchProgressText" class="d-block mt-1 text-muted" style="font-size: 0.75rem;"></small>
+    <div class="pp-scene">
+      <div class="pp-book">
+        <!-- 裏表紙（青いカバー） -->
+        <div class="pp-sheet pp-cover"></div>
+        <!-- 左ページ（固定・ウォーターマーク付き） -->
+        <div class="pp-sheet pp-left"><span class="pp-wm">MIRAI<br>PASSPORT</span></div>
+        <!-- 右ページ（固定ベース・罫線パターン） -->
+        <div class="pp-sheet pp-right"></div>
+        <!-- めくれるページ（5枚・各ページにスタンプ＋テキストバー） -->
+        <div class="pp-sheet pp-flip">
+          <div class="pp-face pp-front pp-d1">
+            <div class="pp-stamp pp-stamp-circle"><i class="bi bi-star-fill"></i></div>
+            <div class="pp-bar"></div><div class="pp-bar"></div><div class="pp-bar"></div>
+          </div>
+          <div class="pp-face pp-back"></div>
         </div>
+        <div class="pp-sheet pp-flip">
+          <div class="pp-face pp-front pp-d2">
+            <div class="pp-stamp pp-stamp-rect"><i class="bi bi-compass-fill"></i></div>
+            <div class="pp-bar"></div><div class="pp-bar"></div>
+          </div>
+          <div class="pp-face pp-back"></div>
+        </div>
+        <div class="pp-sheet pp-flip">
+          <div class="pp-face pp-front pp-d3">
+            <div class="pp-stamp pp-stamp-diamond"><i class="bi bi-lightbulb-fill"></i></div>
+            <div class="pp-bar"></div><div class="pp-bar"></div><div class="pp-bar"></div>
+          </div>
+          <div class="pp-face pp-back"></div>
+        </div>
+        <div class="pp-sheet pp-flip">
+          <div class="pp-face pp-front pp-d4">
+            <div class="pp-stamp pp-stamp-rounded"><i class="bi bi-pencil-fill"></i></div>
+            <div class="pp-bar"></div><div class="pp-bar"></div>
+          </div>
+          <div class="pp-face pp-back"></div>
+        </div>
+        <div class="pp-sheet pp-flip">
+          <div class="pp-face pp-front pp-d5">
+            <div class="pp-stamp pp-stamp-circle"><i class="bi bi-trophy-fill"></i></div>
+            <div class="pp-bar"></div><div class="pp-bar"></div><div class="pp-bar"></div>
+          </div>
+          <div class="pp-face pp-back"></div>
+        </div>
+      </div>
+    </div>
+    <!-- テキスト表示エリア -->
+    <div class="loading-container">
+      <div class="loading-label" id="loadingText">準備中...</div>
+      <div class="loading-subtext" id="loadingSubText">しばらくお待ちください</div>
+      <!-- 一括処理時のプログレスバー（通常は非表示） -->
+      <div id="batchProgressContainer" class="d-none mt-3" style="width: 200px; margin: 0 auto;">
+        <div class="progress" style="height: 6px;"><div id="batchProgressBar" class="progress-bar bg-info" style="width:0%"></div></div>
+        <small id="batchProgressText" class="d-block mt-1 text-muted" style="font-size: 0.75rem;"></small>
       </div>
     </div>
   </div>
