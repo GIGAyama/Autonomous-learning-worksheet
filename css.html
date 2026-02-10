@@ -476,6 +476,27 @@ footer {
   z-index: 100;
 }
 
+/* --- 画像ツールバー --- */
+#imageToolbar {
+  display: none; /* 最初は非表示 */
+  position: absolute;
+  top: 0; /* JSで動的に設定 */
+  left: 0; /* JSで動的に設定 */
+  background-color: var(--bg-card);
+  border-radius: 50rem;
+  box-shadow: var(--shadow-sm);
+  z-index: 101; /* editorToolbarより手前に */
+}
+#imageToolbar .btn {
+    border-radius: 50rem;
+    padding: 0.25rem 0.6rem;
+    font-size: 0.8rem;
+}
+#imageToolbar .vr {
+    height: 1.5rem;
+    background-color: #dee2e6;
+}
+
 /* --- 用紙のスクロール可能エリア --- */
 .sheet-scroll-area {
   flex-grow: 1;
@@ -701,6 +722,51 @@ td:has(.eval-btn.active) .eval-btn:not(.active) {
 /* ============================================================
  *  9. ビジュアルエディタ（先生モードの編集補助機能）
  * ============================================================ */
+
+/* --- 選択中の画像コンテナとリサイズハンドル --- */
+.resizable-image-container {
+  /* position: relative; はJSでinlineで設定 */
+  outline: 1px dashed transparent; /* 非アクティブ時は透明な枠 */
+  transition: outline-color 0.2s ease;
+  user-select: none; /* リサイズ中のテキスト選択防止 */
+  min-width: 50px; /* 最小幅 */
+  min-height: 50px; /* 最小高さ */
+  vertical-align: middle; /* インラインブロックとして画像が綺麗に並ぶように */
+}
+
+/* アクティブ時の枠線 */
+.resizable-image-container.is-resizable-active {
+  outline: 1px dashed var(--color-primary);
+  cursor: grab;
+}
+
+/* リサイズハンドル */
+.resize-handle {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  background: var(--color-primary);
+  border: 1px solid #fff;
+  border-radius: 50%;
+  z-index: 1; /* 親要素のoutlineより手前に */
+}
+
+/* 四隅のハンドル */
+.resize-nw { top: -5px; left: -5px; cursor: nwse-resize; }
+.resize-ne { top: -5px; right: -5px; cursor: nesw-resize; }
+.resize-sw { bottom: -5px; left: -5px; cursor: nesw-resize; }
+.resize-se { bottom: -5px; right: -5px; cursor: nwse-resize; }
+
+/* 辺の中央のハンドル */
+.resize-n { top: -5px; left: calc(50% - 5px); cursor: ns-resize; }
+.resize-s { bottom: -5px; left: calc(50% - 5px); cursor: ns-resize; }
+.resize-w { left: -5px; top: calc(50% - 5px); cursor: ew-resize; }
+.resize-e { right: -5px; top: calc(50% - 5px); cursor: ew-resize; }
+
+/* 選択中の画像のデフォルトマージンを上書き */
+.resizable-image-container.is-resizable-active img {
+    margin: 0 auto !important; /* ハンドルが隠れないように、かつ中央寄せを維持 */
+}
 
 /* --- 記述欄・罫線ボックスはリサイズ可能にする --- */
 .ws-box, .ws-lines, .ws-instruction {
@@ -1061,6 +1127,34 @@ body.student-mode .ws-answer:empty::before {
 
 
 /* ============================================================
+ *  12. ポートフォリオ画面
+ * ============================================================ */
+
+.portfolio-item {
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  border: 1px solid var(--border-color);
+}
+
+.portfolio-item:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--shadow-md);
+}
+
+#portfolioList .card-body .row {
+  min-height: 120px;
+}
+
+#portfolioDetailModal .modal-body {
+  background-color: #f8f9fa;
+}
+
+#portfolioDetailFeedback {
+  min-height: 100px;
+}
+
+
+/* ============================================================
  *  11. 印刷用スタイル（@media print）
  *  ※ ブラウザの「印刷」やPDF出力時に適用される
  *  ※ UIを全て隠して、A4用紙にワークシートだけを印刷する
@@ -1095,7 +1189,7 @@ body.student-mode .ws-answer:empty::before {
   /* 不要なUI要素をすべて非表示 */
   #sidebar, #studentSidebar, header, #editorToolbar, footer,
   #loadingOverlay, #contextMenu, .btn-float,
-  .db-filter-panel, .db-detail-panel {
+  .db-filter-panel, .db-detail-panel, #portfolioMode {
     display: none !important;
   }
 

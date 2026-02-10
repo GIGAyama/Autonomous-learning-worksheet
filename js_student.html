@@ -74,9 +74,42 @@ Object.assign(App, {
       await App.loadConfig();
       App.loadFromHistory(taskId);
     } else {
+      // URLに課題IDがない場合はポートフォリオを初期表示
+      App.initPortfolioMode();
       UI.hideLoading();
-      Swal.fire('エラー', '課題IDが無効です。URLを確認してください。', 'error');
     }
+  },
+
+  /**
+   * ヘッダーのメニューボタンのアクティブ状態を管理する
+   * @param {string} activeMode - 'work', 'plaza', 'portfolio' のいずれか
+   */
+  updateNavButtons: (activeMode) => {
+    const buttons = {
+      work: document.getElementById('btnModeWork'),
+      plaza: document.getElementById('btnModePlaza'),
+      portfolio: document.getElementById('btnModePortfolio')
+    };
+    for (const mode in buttons) {
+      if (buttons[mode]) {
+        buttons[mode].classList.replace(
+          mode === activeMode ? 'btn-light' : 'btn-primary',
+          mode === activeMode ? 'btn-primary' : 'btn-light'
+        );
+      }
+    }
+  },
+
+  /**
+   * ワークシート表示エリアに戻る
+   */
+  showWorkspace: () => {
+    document.getElementById('portfolioMode').classList.add('d-none');
+    document.getElementById('mainBodyArea').classList.remove('d-none');
+    document.getElementById('studentActionControls').classList.remove('d-none');
+    App.updateNavButtons('work');
+    // 広場が開いていれば閉じる
+    if (State.isGalleryMode) App.toggleGalleryMode(false, false);
   },
 
 
@@ -157,6 +190,8 @@ Object.assign(App, {
         App.notifyCompass('syncStatus', { status: 'done', mode: 'normal' });
         // ローカルの下書きデータを削除
         localStorage.removeItem('manabi_' + State.currentTask.id);
+        // ポートフォリオデータを無効化して次回再読込させる
+        State.portfolioData = null;
       }
 
       UI.toast(status === 'draft' ? "保存しました" : "提出しました！");
@@ -228,7 +263,7 @@ Object.assign(App, {
           btn.onclick = function() {
             Swal.fire({
               title: '先生からのコメント',
-              text: resp.feedbackText || "（コメントなし）",
+              html: `<div class="text-start p-3 border rounded bg-light">${resp.feedbackText.replace(/\n/g, '<br>')}</div>` || "（コメントなし）",
               icon: 'info'
             });
           };
@@ -262,20 +297,25 @@ Object.assign(App, {
    * 非表示時: メインエリアを元に戻す
    *
    * @param {boolean} show - true で表示、false で非表示
+   * @param {boolean} updateNav - ナビゲーションボタンの状態を更新するかどうか
    */
-  toggleGalleryMode: async (show) => {
+  toggleGalleryMode: async (show, updateNav = true) => {
     State.isGalleryMode = show;
 
     var workspace = document.getElementById('workspaceContainer');
     var plaza     = document.getElementById('plazaPanel');
-    var btnWork   = document.getElementById('btnModeWork');
-    var btnPlaza  = document.getElementById('btnModePlaza');
+
+    if (updateNav) {
+        App.updateNavButtons(show ? 'plaza' : 'work');
+    }
 
     if (show) {
       // --- 広場を開く ---
-      // モード切替ボタンの見た目を切替
-      if (btnWork)  btnWork.classList.replace('btn-primary', 'btn-light');
-      if (btnPlaza) btnPlaza.classList.replace('btn-light', 'btn-primary');
+      // ポートフォリオを隠す
+      document.getElementById('portfolioMode').classList.add('d-none');
+      document.getElementById('mainBodyArea').classList.remove('d-none');
+      document.getElementById('studentActionControls').classList.remove('d-none');
+
       // メインエリアを縮小
       if (workspace) workspace.classList.add('scale-down-mode');
       // 広場パネルを表示
@@ -284,8 +324,6 @@ Object.assign(App, {
       await App.loadPlazaItems();
     } else {
       // --- 広場を閉じる ---
-      if (btnWork)  btnWork.classList.replace('btn-light', 'btn-primary');
-      if (btnPlaza) btnPlaza.classList.replace('btn-primary', 'btn-light');
       if (workspace) workspace.classList.remove('scale-down-mode');
       if (plaza) plaza.classList.add('d-none');
     }
@@ -452,6 +490,151 @@ Object.assign(App, {
       d.innerHTML = '<span class="fw-bold me-2">' + r.fromName + '</span> ' + r.value;
       div.appendChild(d);
     });
+  },
+
+  /* ==========================================================
+   *  8. 【新機能】ポートフォリオ
+   * ========================================================== */
+
+  /**
+   * ポートフォリオモードを初期化・表示する
+   */
+  initPortfolioMode: async () => {
+    App.updateNavButtons('portfolio');
+    document.getElementById('mainBodyArea').classList.add('d-none');
+    document.getElementById('portfolioMode').classList.remove('d-none');
+    document.getElementById('studentActionControls').classList.add('d-none');
+
+    // データがキャッシュされていなければサーバーから取得
+    if (!State.portfolioData) {
+        UI.showLoading("ポートフォリオを読み込み中...");
+        try {
+            const data = await Server.call('getPortfolioData', State.studentId);
+            State.portfolioData = data;
+        } catch (e) {
+            console.error("ポートフォリオデータの読み込みに失敗:", e);
+            document.getElementById('portfolioList').innerHTML = '<div class="text-center text-danger p-5">データの読み込みに失敗しました。</div>';
+            return;
+        } finally {
+            UI.hideLoading();
+        }
+    }
+    
+    // フィルターとリストをレンダリング
+    App.renderPortfolioFilters();
+    App.renderPortfolioList();
+  },
+  
+  /**
+   * ポートフォリオのフィルターを描画する
+   */
+  renderPortfolioFilters: () => {
+    const unitFilterEl = document.getElementById('portfolioUnitFilter');
+    if (!unitFilterEl || !State.portfolioData) return;
+
+    const unitNames = [...new Set(State.portfolioData.map(item => item.unitName))];
+    
+    // イベントリスナーを一時的に削除
+    unitFilterEl.onchange = null;
+    
+    const currentVal = unitFilterEl.value;
+    unitFilterEl.innerHTML = '<option value="__all__">すべての単元</option>';
+    unitNames.forEach(name => {
+        const option = document.createElement('option');
+        option.value = name;
+        option.textContent = name;
+        unitFilterEl.appendChild(option);
+    });
+    unitFilterEl.value = currentVal;
+    
+    // イベントリスナーを再設定
+    unitFilterEl.onchange = App.renderPortfolioList;
+  },
+
+  /**
+   * ポートフォリオのリストを描画する
+   */
+  renderPortfolioList: () => {
+    const listEl = document.getElementById('portfolioList');
+    if (!listEl || !State.portfolioData) return;
+
+    const unitFilter = document.getElementById('portfolioUnitFilter').value;
+    
+    const filteredData = State.portfolioData.filter(item => {
+      return unitFilter === '__all__' || item.unitName === unitFilter;
+    });
+
+    if (filteredData.length === 0) {
+      listEl.innerHTML = '<div class="text-center text-muted p-5">表示するデータがありません。</div>';
+      return;
+    }
+
+    listEl.innerHTML = filteredData.map(item => `
+      <div class="card card-body shadow-sm mb-3 portfolio-item" onclick="App.openPortfolioDetail('${item.responseId}')">
+        <div class="row align-items-center">
+          <div class="col-md-3">
+            <img src="${item.canvasImage || 'https://via.placeholder.com/150'}" class="img-fluid rounded border">
+          </div>
+          <div class="col-md-9">
+            <small class="text-muted">${new Date(item.submittedAt).toLocaleDateString()}</small>
+            <h5 class="mb-1">${item.stepTitle}</h5>
+            <p class="mb-1 small text-primary fw-bold">${item.unitName}</p>
+            <span class="badge bg-${item.status === 'graded' ? 'primary' : 'success'}">${item.status === 'graded' ? '返却済' : '提出済'}</span>
+          </div>
+        </div>
+      </div>
+    `).join('');
+  },
+  
+  /**
+   * ポートフォリオの詳細モーダルを開く
+   * @param {string} responseId - 表示する回答のID
+   */
+  openPortfolioDetail: (responseId) => {
+    const item = State.portfolioData.find(d => d.responseId === responseId);
+    if (!item) return;
+
+    State.currentPortfolioItem = item;
+
+    document.getElementById('portfolioDetailTitle').textContent = `「${item.stepTitle}」の提出内容`;
+    document.getElementById('portfolioDetailImage').src = item.canvasImage;
+    document.getElementById('portfolioDetailFeedback').innerHTML = item.feedbackText ? item.feedbackText.replace(/\n/g, '<br>') : '<span class="text-muted">コメントはありません</span>';
+    document.getElementById('portfolioDetailReflection').value = item.reflectionText || '';
+
+    const saveBtn = document.getElementById('saveReflectionBtn');
+    saveBtn.onclick = App.saveCurrentReflection;
+
+    const modal = new bootstrap.Modal(document.getElementById('portfolioDetailModal'));
+    modal.show();
+  },
+
+  /**
+   * 現在の振り返りを保存する
+   */
+  saveCurrentReflection: async () => {
+    if (!State.currentPortfolioItem) return;
+
+    const responseId = State.currentPortfolioItem.responseId;
+    const reflectionText = document.getElementById('portfolioDetailReflection').value;
+
+    UI.showLoading("振り返りを保存中...");
+    try {
+      await Server.call('saveStudentReflection', { responseId, reflectionText });
+      
+      // Stateのデータを更新
+      const itemInState = State.portfolioData.find(d => d.responseId === responseId);
+      if(itemInState) {
+        itemInState.reflectionText = reflectionText;
+      }
+      
+      UI.toast('振り返りを保存しました');
+      const modal = bootstrap.Modal.getInstance(document.getElementById('portfolioDetailModal'));
+      modal.hide();
+    } catch(e) {
+      // エラー処理は Server.call 内でハンドルされる
+    } finally {
+      UI.hideLoading();
+    }
   },
 
 

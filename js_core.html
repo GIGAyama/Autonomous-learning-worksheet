@@ -238,6 +238,8 @@ const State = {
   /* --- 児童関連 --- */
   studentId:     null,  // 児童のID（LocalStorage or コンパス連携から取得）
   ocrCache:      "",    // OCR読み取りテキストのキャッシュ
+  portfolioData: null,  //【新機能】ポートフォリオデータ
+  currentPortfolioItem: null, //【新機能】表示中のポートフォリオアイテム
 
   /* --- 教師関連 --- */
   gradingRow:       null, // 添削中の回答のスプレッドシート行番号
@@ -853,10 +855,28 @@ const App = {
               State.fabricCanvas.centerObject(obj);
             });
           } else {
-            // 通常モード: HTML内にimgタグとして挿入
-            App.insertAtCursor(
-              '<img src="' + dataUrl + '" style="max-width:100%; border:1px solid #ccc; display:block; margin:10px auto;">'
-            );
+            // 通常モード: Googleドライブにアップロードしてimgタグを挿入
+            UI.showLoading("画像をアップロード中...");
+            Server.call('uploadImageToDrive', dataUrl)
+              .then(function(fileId) {
+                if (fileId) {
+                  var driveUrl = 'https://lh3.googleusercontent.com/d/' + fileId;
+                  App.insertAtCursor(
+                    '<div class="resizable-image-container" style="display:inline-block; position:relative;">' +
+                    '<img src="' + driveUrl + '" style="max-width:100%; height:auto; display:block; margin:10px auto;">' +
+                    '</div>'
+                  );
+                } else {
+                  throw new Error("ファイルIDがサーバーから返されませんでした。");
+                }
+              })
+              .catch(function(error) {
+                console.error("画像のアップロードに失敗しました:", error);
+                Swal.fire('エラー', '画像のアップロードに失敗しました。', 'error');
+              })
+              .finally(function() {
+                UI.hideLoading();
+              });
           }
         };
         img.src = e.target.result;
@@ -892,6 +912,62 @@ const App = {
     }
     // カーソルが見つからない場合は末尾に追加
     el.insertAdjacentHTML('beforeend', html);
+  },
+
+  /**
+   * 選択中の画像を位置合わせする
+   * @param {string} alignment - 'left', 'center', 'right'
+   */
+  alignImage: (alignment) => {
+    if (!Editor.selectedImageContainer) return;
+
+    const container = Editor.selectedImageContainer;
+    container.style.removeProperty('float'); // Clear previous float
+    container.style.removeProperty('margin-left'); // Clear previous margin
+    container.style.removeProperty('margin-right'); // Clear previous margin
+    container.style.removeProperty('display'); // Clear previous display
+    container.style.removeProperty('text-align'); // Clear previous text-align (if applied to parent)
+
+    if (alignment === 'left') {
+        container.style.float = 'left';
+        container.style.marginRight = '10px'; // 余白調整
+        container.style.marginBottom = '10px';
+    } else if (alignment === 'center') {
+        container.style.display = 'block';
+        container.style.marginLeft = 'auto';
+        container.style.marginRight = 'auto';
+        container.style.marginBottom = '10px';
+    } else if (alignment === 'right') {
+        container.style.float = 'right';
+        container.style.marginLeft = '10px'; // 余白調整
+        container.style.marginBottom = '10px';
+    }
+    App.saveCurrentWorksheet(); // 変更を保存
+  },
+
+  /**
+   * 選択中の画像を削除する
+   */
+  deleteSelectedImage: () => {
+    if (!Editor.selectedImageContainer) return;
+
+    Swal.fire({
+      title: '画像を削除しますか？',
+      text: "この操作は元に戻せません",
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonColor: '#d33',
+      cancelButtonColor: '#3085d6',
+      confirmButtonText: '削除',
+      cancelButtonText: 'キャンセル'
+    }).then((result) => {
+      if (result.isConfirmed) {
+        Editor.selectedImageContainer.remove();
+        Editor.hideImageToolbar();
+        App.saveCurrentWorksheet(); // 変更を保存
+        UI.toast('画像を削除しました', 'success');
+      }
+    });
   }
 };
 
@@ -909,6 +985,20 @@ const Editor = {
 
   /** 右クリックメニューで操作中の要素 */
   currentTarget: null,
+  /** 現在リサイズ中の要素 */
+  currentResizable: null,
+  /** 現在ドラッグ中のリサイズハンドル */
+  currentHandle: null,
+  /** リサイズ開始時のマウス位置 */
+  startMouseX: 0,
+  startMouseY: 0,
+  /** リサイズ開始時の要素のサイズ */
+  startWidth: 0,
+  startHeight: 0,
+  /** リサイズ開始時の要素のアスペクト比 */
+  startAspectRatio: 0,
+  /** 選択中の画像コンテナ */
+  selectedImageContainer: null,
 
   /**
    * エディタを初期化する（先生モード起動時に一度だけ呼ばれる）
@@ -929,7 +1019,7 @@ const Editor = {
     document.addEventListener('contextmenu', function(e) {
       var ws = document.getElementById('worksheetContent');
       if (!ws || !ws.contains(e.target)) return;  // 本文外なら無視
-      if (document.getElementById('worksheetContent').contentEditable !== "true") return;  // 編集不可なら無視
+      if (ws.contentEditable !== "true") return;  // 編集不可なら無視
 
       e.preventDefault();  // ブラウザ標準のメニューを抑制
       Editor.showContextMenu(e, menu);
@@ -938,8 +1028,203 @@ const Editor = {
     // メニュー以外をクリックしたらメニューを閉じる
     document.addEventListener('click', function() { menu.style.display = 'none'; });
 
+    // --- リサイズ可能な要素の選択とハンドルの表示 ---
+    document.getElementById('worksheetContent').addEventListener('mousedown', Editor.handleContentMouseDown);
+
+    // グローバルなマウスイベントでリサイズ処理を制御
+    document.addEventListener('mousemove', Editor.doResize);
+    document.addEventListener('mouseup', Editor.stopResizing);
+
+    // ドキュメント全体のクリックでツールバーを非表示にする
+    document.addEventListener('click', (e) => {
+        const imageToolbar = document.getElementById('imageToolbar');
+        const worksheetContent = document.getElementById('worksheetContent');
+        if (Editor.selectedImageContainer && imageToolbar && worksheetContent &&
+            !imageToolbar.contains(e.target) && !worksheetContent.contains(e.target)) {
+            Editor.hideImageToolbar();
+        }
+    });
+
     // リサイズハンドルを有効化
     Editor.enableResizing();
+  },
+
+  /**
+   * worksheetContent 内でのマウスダウンイベントを処理する
+   * リサイズ可能な要素がクリックされた場合に選択状態にする
+   * @param {MouseEvent} e
+   */
+  handleContentMouseDown: (e) => {
+    // 先生モードでない、または編集モードでなければ何もしない
+    if (State.mode !== 'teacher' || document.getElementById('worksheetContent').contentEditable !== "true") {
+      // 選択解除
+      if (Editor.currentResizable) {
+        Editor.removeResizeHandles(Editor.currentResizable);
+        Editor.currentResizable = null;
+      }
+      // 画像ツールバーを非表示にする
+      Editor.hideImageToolbar();
+      return;
+    }
+
+    const target = e.target;
+    const resizableTarget = target.closest('.resizable-image-container'); // リサイズ対象要素
+
+    // クリックされたのがリサイズハンドルなら、リサイズ開始
+    if (target.classList.contains('resize-handle')) {
+      Editor.startResizing(e, target);
+      return;
+    }
+
+    // 現在リサイズ中の要素があれば、まずハンドラを非表示にする
+    if (Editor.currentResizable && Editor.currentResizable !== resizableTarget) {
+      Editor.removeResizeHandles(Editor.currentResizable);
+      Editor.currentResizable = null;
+    }
+
+    // クリックされたのがリサイズ可能な要素なら、選択状態にしてハンドルを表示
+    if (resizableTarget) {
+      if (Editor.currentResizable !== resizableTarget) {
+        Editor.currentResizable = resizableTarget;
+        Editor.addResizeHandles(resizableTarget);
+        Editor.selectedImageContainer = resizableTarget; // 画像選択を記憶
+        Editor.showImageToolbar(); // ツールバーを表示
+      }
+      e.stopPropagation(); // 親要素へのイベント伝播を停止
+    } else {
+      // リサイズ可能な要素以外をクリックしたら、選択解除
+      if (Editor.currentResizable) {
+        Editor.removeResizeHandles(Editor.currentResizable);
+        Editor.currentResizable = null;
+      }
+      Editor.hideImageToolbar(); // ツールバーを非表示
+      Editor.selectedImageContainer = null; // 選択をクリア
+    }
+  },
+
+  /**
+   * 指定された要素にリサイズハンドルを追加する
+   * @param {HTMLElement} element - リサイズハンドルを追加する要素
+   */
+  addResizeHandles: (element) => {
+    Editor.removeResizeHandles(element); // 既存のハンドルがあれば削除
+
+    const handlePositions = ['nw', 'ne', 'sw', 'se', 'n', 's', 'w', 'e'];
+    handlePositions.forEach(pos => {
+      const handle = document.createElement('div');
+      handle.className = `resize-handle resize-${pos}`;
+      handle.dataset.direction = pos;
+      element.appendChild(handle);
+    });
+    element.classList.add('is-resizable-active'); // アクティブ状態のスタイルを追加
+  },
+
+  /**
+   * 指定された要素からリサイズハンドルを削除する
+   * @param {HTMLElement} element - リサイズハンドルを削除する要素
+   */
+  removeResizeHandles: (element) => {
+    element.querySelectorAll('.resize-handle').forEach(handle => handle.remove());
+    element.classList.remove('is-resizable-active'); // アクティブ状態のスタイルを削除
+  },
+
+  /**
+   * リサイズ処理を開始する
+   * @param {MouseEvent} e - マウスイベント
+   * @param {HTMLElement} handle - ドラッグされたリサイズハンドル
+   */
+  startResizing: (e, handle) => {
+    if (!Editor.currentResizable) return;
+
+    e.preventDefault(); // テキスト選択などを防ぐ
+    e.stopPropagation(); // 親要素へのイベント伝播を停止
+
+    Editor.currentHandle = handle;
+    Editor.startMouseX = e.clientX;
+    Editor.startMouseY = e.clientY;
+    Editor.startWidth = Editor.currentResizable.offsetWidth;
+    Editor.startHeight = Editor.currentResizable.offsetHeight;
+    Editor.startAspectRatio = Editor.startWidth / Editor.startHeight;
+
+    // リサイズ中にiframeなどのイベントをブロック
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = getComputedStyle(handle).cursor; // ハンドルのカーソルをボディ全体に適用
+  },
+
+  /**
+   * リサイズ処理を実行する（mousemove イベントで呼ばれる）
+   * @param {MouseEvent} e - マウスイベント
+   */
+  doResize: (e) => {
+    if (!Editor.currentResizable || !Editor.currentHandle) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    const dx = e.clientX - Editor.startMouseX;
+    const dy = e.clientY - Editor.startMouseY;
+    const direction = Editor.currentHandle.dataset.direction;
+
+    let newWidth = Editor.startWidth;
+    let newHeight = Editor.startHeight;
+
+    // 幅の計算
+    if (direction.includes('e')) {
+      newWidth = Editor.startWidth + dx;
+    } else if (direction.includes('w')) {
+      newWidth = Editor.startWidth - dx;
+    }
+
+    // 高さの計算
+    if (direction.includes('s')) {
+      newHeight = Editor.startHeight + dy;
+    } else if (direction.includes('n')) {
+      newHeight = Editor.startHeight - dy;
+    }
+
+    // アスペクト比を維持（コーナーハンドルをドラッグした場合）
+    if (direction.length === 2) { // コーナーハンドル (nw, ne, sw, se)
+        // 元のアスペクト比を基に調整
+        const imageElement = Editor.currentResizable.querySelector('img');
+        if (imageElement && imageElement.naturalWidth && imageElement.naturalHeight) {
+            Editor.startAspectRatio = imageElement.naturalWidth / imageElement.naturalHeight;
+        }
+
+        const currentRatio = newWidth / newHeight;
+        if (Math.abs(currentRatio - Editor.startAspectRatio) > 0.01) { // わずかなズレは許容
+            // どちらの軸の動きが大きかったかで主軸を決める
+            if (Math.abs(dx) > Math.abs(dy)) {
+                newHeight = newWidth / Editor.startAspectRatio;
+            } else {
+                newWidth = newHeight * Editor.startAspectRatio;
+            }
+        }
+    }
+
+
+    // 最小サイズを保証
+    newWidth = Math.max(50, newWidth);
+    newHeight = Math.max(50, newHeight);
+
+    Editor.currentResizable.style.width = `${newWidth}px`;
+    Editor.currentResizable.style.height = `${newHeight}px`;
+
+    // 内部の画像要素も合わせてリサイズ（必要なら）
+    const innerImage = Editor.currentResizable.querySelector('img');
+    if (innerImage) {
+        innerImage.style.width = '100%';
+        innerImage.style.height = '100%';
+        innerImage.style.objectFit = 'contain'; // 画像がコンテナに収まるように
+    }
+  },
+
+  /**
+   * リサイズ処理を終了する（mouseup イベントで呼ばれる）
+   */
+  stopResizing: () => {
+    Editor.currentHandle = null;
+    document.body.style.userSelect = '';
+    document.body.style.cursor = '';
   },
 
   /**
@@ -958,10 +1243,88 @@ const Editor = {
       + '@media print { .ws-box, .ws-lines { resize: none; overflow: visible; } }'
       + '#worksheetContent[contenteditable="true"] .ws-box:hover,'
       + '#worksheetContent[contenteditable="true"] .ws-lines:hover,'
-      + '#worksheetContent[contenteditable="true"] table:hover {'
+      + '#worksheetContent[contenteditable="true"] table:hover,'
+      + '#worksheetContent[contenteditable="true"] .resizable-image-container:not(.is-resizable-active):hover {'
       + '  outline: 2px dashed #a2d2ff; cursor: text;'
       + '}';
     document.head.appendChild(style);
+  },
+
+  /**
+   * 画像ツールバーを表示する
+   */
+  showImageToolbar: () => {
+    const toolbar = document.getElementById('imageToolbar');
+    if (!toolbar || !Editor.selectedImageContainer) return;
+
+    const rect = Editor.selectedImageContainer.getBoundingClientRect();
+    const workspaceContainer = document.getElementById('workspaceContainer');
+    const workspaceContainerRect = workspaceContainer ? workspaceContainer.getBoundingClientRect() : { top: 0, left: 0 };
+
+    // まずd-noneクラスを削除して幅を確定させる
+    toolbar.classList.remove('d-none');
+
+    const toolbarWidth = toolbar.offsetWidth;
+    const toolbarHeight = toolbar.offsetHeight;
+
+    // workspaceContainerからの相対位置で計算
+    let topPos = rect.top - workspaceContainerRect.top - toolbarHeight - 10; // 画像の上10pxに表示
+    let leftPos = rect.left - workspaceContainerRect.left + (rect.width / 2) - (toolbarWidth / 2);
+
+    // ツールバーがworkspaceContainerの左端を超えないように調整
+    if (leftPos < 0) {
+        leftPos = 0;
+    }
+    // ツールバーがworkspaceContainerの右端を超えないように調整
+    if (leftPos + toolbarWidth > workspaceContainerRect.width) {
+        leftPos = workspaceContainerRect.width - toolbarWidth;
+    }
+    // ツールバーがworkspaceContainerの上端を超えないように調整
+    if (topPos < 0) {
+        topPos = rect.bottom - workspaceContainerRect.top + 10; // 画像の下に表示
+    }
+
+
+    toolbar.style.left = `${leftPos}px`;
+    toolbar.style.top = `${topPos}px`;
+
+
+    // イベントリスナーをアタッチ
+    toolbar.querySelectorAll('button[data-align]').forEach(button => {
+        // 既存のイベントリスナーがあれば削除
+        button.onclick = null;
+        button.onclick = (e) => {
+            e.stopPropagation(); // 親要素への伝播を停止
+            App.alignImage(button.dataset.align);
+        };
+    });
+    const deleteButton = toolbar.querySelector('button[data-action="delete"]');
+    if (deleteButton) {
+        deleteButton.onclick = null; // 既存のイベントリスナーがあれば削除
+        deleteButton.onclick = (e) => {
+            e.stopPropagation(); // 親要素への伝播を停止
+            App.deleteSelectedImage();
+        };
+    }
+  },
+
+  /**
+   * 画像ツールバーを非表示にする
+   */
+  hideImageToolbar: () => {
+    const toolbar = document.getElementById('imageToolbar');
+    if (toolbar) {
+      toolbar.classList.add('d-none'); // d-noneクラスを追加して非表示にする
+      // イベントリスナーをデタッチ
+      toolbar.querySelectorAll('button[data-align]').forEach(button => {
+          button.onclick = null;
+      });
+      const deleteButton = toolbar.querySelector('button[data-action="delete"]');
+      if (deleteButton) deleteButton.onclick = null;
+
+      // 選択状態をクリア
+      Editor.selectedImageContainer = null;
+    }
   },
 
   /**
@@ -995,6 +1358,14 @@ const Editor = {
       items = [
         { label: '<i class="bi bi-files"></i> ボックスを複製', action: function() { Editor.cloneElement(target); } },
         { label: '<i class="bi bi-trash"></i> 削除',           action: function() { target.remove(); } }
+      ];
+    }
+    // --- リサイズ可能な画像コンテナで右クリックした場合 ---
+    else if (target.closest('.resizable-image-container')) {
+      const container = target.closest('.resizable-image-container');
+      items = [
+        { label: '<i class="bi bi-files"></i> 画像を複製', action: function() { Editor.cloneElement(container); } },
+        { label: '<i class="bi bi-trash"></i> 削除',           action: function() { container.remove(); } }
       ];
     }
     // --- その他の要素で右クリックした場合 ---
@@ -1062,6 +1433,11 @@ const Editor = {
   cloneElement: (el) => {
     var clone = el.cloneNode(true);
     el.after(clone);
+    // クローンされた要素がリサイズ可能な画像コンテナの場合、ハンドルを再追加
+    if (clone.classList.contains('resizable-image-container')) {
+        Editor.removeResizeHandles(clone); // クローン元からコピーされたハンドルを削除
+        // 新しいクローンにハンドルをすぐに表示せず、クリックでアクティブになるのを待つ
+    }
   }
 };
 

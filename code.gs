@@ -82,7 +82,8 @@ var RS_COL_FEEDBACK_JSON= 11;  // K列
 var RS_COL_CANVAS_JSON  = 12;  // L列
 var RS_COL_IS_PUBLIC    = 13;  // M列
 var RS_COL_REACTIONS    = 14;  // N列
-var RS_TOTAL_COLS       = 14;  // 列の総数
+var RS_COL_REFLECTION   = 15;  // O列
+var RS_TOTAL_COLS       = 15;  // 列の総数
 
 
 /* ============================================================
@@ -112,6 +113,11 @@ function doGet(e) {
   template.studentId   = e.parameter.studentId   || '';
   template.studentName = e.parameter.studentName  || '';
   template.importId    = e.parameter.importId    || '';
+
+  // 児童モードの場合は、GASセッションのメールアドレスを studentId のフォールバックとして使用
+  if (template.mode === 'student' && !template.studentId) {
+    template.studentId = Session.getActiveUser().getEmail();
+  }
 
   return template.evaluate()
     .setTitle(APP_NAME)
@@ -193,7 +199,7 @@ function performInitialSetup() {
       'responseId', 'taskId', 'studentId', 'studentName',
       'submittedAt', 'canvasImage', 'textContent', 'status',
       'feedbackText', 'score', 'feedbackJson', 'canvasJson',
-      'isPublic', 'reactions'
+      'isPublic', 'reactions', 'reflectionText' // O列: 振り返り
     ]);
     ensureSheet(ss, 'ImportQueue', [
       'transactionId', 'dataJson', 'createdAt'
@@ -222,6 +228,12 @@ function ensureSheet(ss, name, header) {
   if (!sheet) {
     sheet = ss.insertSheet(name);
     sheet.appendRow(header);
+  }
+  // ヘッダーが更新されている可能性があるので、常にヘッダー行を上書きする
+  else if (sheet.getLastRow() > 0) {
+     sheet.getRange(1, 1, 1, header.length).setValues([header]);
+  } else {
+     sheet.appendRow(header);
   }
   return sheet;
 }
@@ -503,6 +515,91 @@ function getStudentWorksheetList() {
  * ============================================================ */
 
 /**
+ * 【新機能】ポートフォリオ用のデータを取得する
+ * 指定された児童の全提出データを、ワークシート情報と結合して取得する。
+ * @param {string} studentId - 児童ID
+ * @return {Object[]} ポートフォリオデータの配列
+ */
+function getPortfolioData(studentId) {
+  var ss = getDbSpreadsheet();
+  var studentIdentifier = studentId || Session.getActiveUser().getEmail();
+
+  // --- ワークシート情報をtaskIdをキーにしたMapに変換 ---
+  var wsSheet = ss.getSheetByName('Worksheets');
+  var worksheetsMap = {};
+  if (wsSheet.getLastRow() >= 2) {
+    var wsData = wsSheet.getRange(2, 1, wsSheet.getLastRow() - 1, WS_TOTAL_COLS).getValues();
+    wsData.forEach(function(r) {
+      if (!r[0]) return;
+      worksheetsMap[String(r[0])] = {
+        unitName: String(r[1]),
+        stepTitle: String(r[2]),
+        htmlContent: String(r[3])
+      };
+    });
+  }
+
+  // --- 児童の全提出データを取得 ---
+  var resSheet = ss.getSheetByName('Responses');
+  var portfolio = [];
+  if (resSheet.getLastRow() >= 2) {
+    var resData = resSheet.getDataRange().getValues();
+    for (var i = 1; i < resData.length; i++) {
+      var row = resData[i];
+      // 児童IDが一致するか確認
+      if (String(row[RS_COL_STUDENT_ID - 1]) === studentIdentifier) {
+        var taskId = String(row[RS_COL_TASK_ID - 1]);
+        var worksheetInfo = worksheetsMap[taskId] || { unitName: '不明', stepTitle: '不明', htmlContent: '' };
+
+        portfolio.push({
+          responseId:   row[RS_COL_RESPONSE_ID - 1],
+          taskId:       taskId,
+          submittedAt:  row[RS_COL_SUBMITTED_AT - 1] ? new Date(row[RS_COL_SUBMITTED_AT - 1]).getTime() : 0,
+          canvasImage:  row[RS_COL_CANVAS_IMAGE - 1],
+          textContent:  row[RS_COL_TEXT_CONTENT - 1],
+          status:       row[RS_COL_STATUS - 1],
+          feedbackText: row[RS_COL_FEEDBACK_TXT - 1],
+          canvasJson:   row[RS_COL_CANVAS_JSON - 1],
+          reflectionText: row[RS_COL_REFLECTION - 1] || '',
+          // ワークシート情報
+          unitName:     worksheetInfo.unitName,
+          stepTitle:    worksheetInfo.stepTitle,
+          htmlContent:  worksheetInfo.htmlContent
+        });
+      }
+    }
+  }
+
+  // 新しい順にソートして返す
+  return portfolio.sort(function(a, b) { return b.submittedAt - a.submittedAt; });
+}
+
+/**
+ * 【新機能】児童の「振り返り」を保存する
+ * @param {Object} data - { responseId: string, reflectionText: string }
+ * @return {Object} { success: boolean }
+ */
+function saveStudentReflection(data) {
+    if (!data || !data.responseId || !data.reflectionText) {
+        return { success: false, message: 'パラメータが不足しています。' };
+    }
+
+    var sheet = getDbSpreadsheet().getSheetByName('Responses');
+    var finder = sheet.getRange("A:A")
+        .createTextFinder(data.responseId)
+        .matchEntireCell(true)
+        .findNext();
+
+    if (finder) {
+        var row = finder.getRow();
+        sheet.getRange(row, RS_COL_REFLECTION).setValue(data.reflectionText);
+        return { success: true };
+    }
+
+    return { success: false, message: '対象の回答が見つかりません。' };
+}
+
+/**
  * 児童の回答データを保存する。
  * 同じ taskId × studentId の組み合わせが既に存在すれば更新、
  * 存在しなければ新規追加する。
@@ -566,7 +663,8 @@ function saveStudentResponse(data) {
       "",                        // K列: フィードバックJSON（空）
       data.canvasJson || "",     // L列: キャンバスJSON
       isPublicVal,               // M列: 公開フラグ
-      "[]"                       // N列: リアクション（空配列）
+      "[]",                      // N列: リアクション（空配列）
+      ""                         // O列: 振り返り（空）
     ]);
   }
   return { success: true };
@@ -646,6 +744,7 @@ function getDashboardData() {
         textContent:  row[6],
         status:       row[7],
         feedbackText: row[8]
+        // O列(reflectionText)はダッシュボードに不要なため含めない
       });
     }
   }
@@ -803,7 +902,8 @@ function getMyResponse(taskId, studentId) {
         canvasImage:  values[i][5],
         canvasJson:   values[i][11],
         isPublic:     values[i][12],
-        reactions:    ensureArray(safeJSONParse(values[i][13]))
+        reactions:    ensureArray(safeJSONParse(values[i][13])),
+        reflectionText: values[i][14] || ''
       };
     }
   }
@@ -920,6 +1020,34 @@ function generateRubricAI(data) {
  */
 function getWebAppUrl() {
   return ScriptApp.getService().getUrl();
+}
+
+/**
+ * 画像をGoogleドライブにアップロードし、ファイルIDを返す
+ * @param {string} base64Data - Base64エンコードされた画像データ（Data URL形式）
+ * @return {string} 作成されたファイルのID
+ */
+function uploadImageToDrive(base64Data) {
+  var FOLDER_NAME = "みらいパスポート 添付ファイル";
+
+  // 1. フォルダの取得または作成
+  var folders = DriveApp.getFoldersByName(FOLDER_NAME);
+  var folder = folders.hasNext() ? folders.next() : DriveApp.createFolder(FOLDER_NAME);
+
+  // 2. Base64データからBlobを作成
+  var parts = base64Data.split(',');
+  var contentType = parts[0].split(':')[1].split(';')[0];
+  var decoded = Utilities.base64Decode(parts[1]);
+  var blob = Utilities.newBlob(decoded, contentType, 'image.jpg');
+
+  // 3. ファイルをフォルダに作成
+  var file = folder.createFile(blob);
+
+  // 4. 共有設定を変更して誰でも閲覧可能にする
+  file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+
+  // 5. ファイルIDを返す
+  return file.getId();
 }
 
 /**
