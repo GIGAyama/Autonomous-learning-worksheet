@@ -384,6 +384,7 @@ const App = {
       if (data) {
         // ワークシートが存在する場合: HTML本文を表示
         document.getElementById('worksheetContent').innerHTML = data.htmlContent;
+        App.activateWorksheetScripts(document.getElementById('worksheetContent'));
         State.currentTask.rubricHtml = data.rubricHtml;
         if (data.canvasJson) State.currentTask.canvasData = data.canvasJson;
 
@@ -481,6 +482,7 @@ const App = {
 
         // ワークシートの内容を表示
         document.getElementById('worksheetContent').innerHTML = data.htmlContent;
+        App.activateWorksheetScripts(document.getElementById('worksheetContent'));
         document.getElementById('currentTaskTitle').innerText = data.stepTitle;
         document.getElementById('worksheetContent').contentEditable = (State.mode === 'teacher');
 
@@ -681,18 +683,17 @@ const App = {
         body { margin: 0; padding: 0; font-family: "Zen Maru Gothic", sans-serif; }
         @media print {
           @page { margin: 0; size: A4; }
+          /* メインページの @media print { body * { visibility: hidden } } を上書き */
+          body, body * { visibility: visible !important; }
           body { -webkit-print-color-adjust: exact; print-color-adjust: exact; margin: 0; padding: 0;}
           .print-sheet {
             width: 210mm;
-            height: 296mm; /* A bit less than 297mm to avoid issues, ~1mm shorter than A4 height */
+            min-height: 296mm;
             position: relative;
             box-sizing: border-box;
             margin: 0;
             padding: 15mm;
-            page-break-after: always;
-            overflow: hidden; /* Ensure content doesn't spill outside print area */
           }
-          .print-sheet:last-child { page-break-after: auto; }
           .print-overlay {
             position: absolute;
             top: 0;
@@ -702,9 +703,20 @@ const App = {
             pointer-events: none;
             z-index: 10;
           }
-          .ws-box, .ws-lines, table, tr, .ws-header, h1 { break-inside: avoid; }
-          /* Ensure buttons and controls are hidden in print */
-          .btn, button, style { display: none !important; }
+          /* ページまたぎでコンテンツが分断されないようにする */
+          .ws-box, .ws-lines, .ws-instruction,
+          .ws-header-fixed, .ws-footer-fixed,
+          .ws-assessment-grid, .ws-reflection-box,
+          .ws-rubric-table, .ws-meta-table,
+          .math-grid, .grid-paper, .graph-paper,
+          .resizable-image-container,
+          table, tr, h1, h2, h3 {
+            break-inside: avoid;
+            page-break-inside: avoid;
+          }
+          .btn, button, .resize-handle, style { display: none !important; }
+          .no-print { display: none !important; }
+          svg { break-inside: avoid; page-break-inside: avoid; }
         }
     </style>`;
 
@@ -752,6 +764,22 @@ const App = {
       // 外部画像タグを除去（via.placeholder.com 等、AIが誤挿入する場合の安全策）
       .replace(/<img\s+[^>]*src\s*=\s*["']https?:\/\/[^"']+["'][^>]*\/?>/gi, '<!-- 外部画像は非対応のため除去 -->')
       .trim();
+  },
+
+
+  /**
+   * innerHTML で挿入された <script> タグを実行する。
+   * ブラウザは innerHTML 経由の script を自動実行しないため、
+   * script 要素を再作成して差し替えることで実行させる。
+   * @param {HTMLElement} container - script を含むコンテナ要素
+   */
+  activateWorksheetScripts: (container) => {
+    var scripts = container.querySelectorAll('script');
+    scripts.forEach(function(oldScript) {
+      var newScript = document.createElement('script');
+      newScript.text = oldScript.text;
+      oldScript.parentNode.replaceChild(newScript, oldScript);
+    });
   },
 
 
