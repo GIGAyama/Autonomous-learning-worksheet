@@ -1,3 +1,4 @@
+
 <script>
 /**
  * ============================================================
@@ -1010,7 +1011,7 @@ Object.assign(App, {
       var pages = sheets.map(function(s) {
         return { html: s.htmlContent, img: null };
       });
-      Printer.run(pages);
+      App.openPrintPreview(pages);
     } finally {
       UI.hideLoading();
     }
