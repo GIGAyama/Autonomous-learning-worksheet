@@ -331,30 +331,36 @@ Object.assign(App, {
   initTeacherMode: async (importId) => {
     UI.showLoading("システムを起動しています", "ユーザー設定を確認中...");
 
-    // データベースのセットアップ確認
-    var status = await Server.call('checkSetupStatus');
+    try {
+      // データベースのセットアップ確認
+      var status = await Server.call('checkSetupStatus');
 
-    if (status.isSetup) {
-      // --- セットアップ済み: 通常起動 ---
-      document.getElementById('setupWizard').classList.add('d-none');
-      document.getElementById('appContainer').classList.remove('d-none');
+      if (status.isSetup) {
+        // --- セットアップ済み: 通常起動 ---
+        document.getElementById('setupWizard').classList.add('d-none');
+        document.getElementById('appContainer').classList.remove('d-none');
 
-      // ユーザー設定を読み込み
-      await App.loadConfig();
-      // リッチエディタ（右クリックメニュー等）を初期化
-      Editor.init();
+        // ユーザー設定を読み込み
+        await App.loadConfig();
+        // リッチエディタ（右クリックメニュー等）を初期化
+        Editor.init();
 
-      if (importId) {
-        // コンパスからの連携インポートがある場合
-        App.startImportWizard(importId);
+        if (importId) {
+          // コンパスからの連携インポートがある場合
+          App.startImportWizard(importId);
+        } else {
+          // レガシー: URLパラメータ taskIds による自動生成チェック
+          setTimeout(App.checkAutoGenerate, 800);
+        }
       } else {
-        // レガシー: URLパラメータ taskIds による自動生成チェック
-        setTimeout(App.checkAutoGenerate, 800);
+        // --- 未セットアップ: 初期化画面を表示 ---
+        UI.hideLoading();
+        document.getElementById('setupWizard').classList.remove('d-none');
       }
-    } else {
-      // --- 未セットアップ: 初期化画面を表示 ---
+    } catch (e) {
+      // エラー時もUIを表示してホワイトアウトを防止
       UI.hideLoading();
-      document.getElementById('setupWizard').classList.remove('d-none');
+      document.getElementById('appContainer').classList.remove('d-none');
     }
   },
 
@@ -1691,8 +1697,12 @@ Object.assign(App, {
   /** 作成画面に切り替える */
   dbGoTeacherMode: async () => {
     UI.showLoading("作成画面に移動中...", "");
-    var baseUrl = await Server.call('getWebAppUrl');
-    window.top.location.href = baseUrl + '?mode=teacher';
+    try {
+      var baseUrl = await Server.call('getWebAppUrl');
+      window.top.location.href = baseUrl + '?mode=teacher';
+    } catch (e) {
+      UI.hideLoading();
+    }
   },
 
   /**
